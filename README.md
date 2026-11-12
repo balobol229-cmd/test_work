@@ -33,7 +33,11 @@ make dev        # создаёт базу checkstock, миграции, тест
 make dev-test   # тесты; база checkstock_test создаётся сама
 ```
 
-Другая база задаётся переменной `DATABASE_URL`, например `postgresql+psycopg://user:pass@host:5432/checkstock`.
+Другая база задаётся переменной `DATABASE_URL`, например `postgresql+psycopg://user:pass@host:5432/checkstock`. Адрес вида `postgres://…`, который выдают хостинги, тоже подходит.
+
+### На хостинге (Render)
+
+В репозитории есть [render.yaml](render.yaml): Render → New → Blueprint → этот репозиторий. Он создаст бесплатный PostgreSQL и веб-сервис из того же Dockerfile, а приложение само возьмёт порт из `PORT`. На бесплатном тарифе сервис засыпает без запросов, поэтому первое открытие занимает около минуты.
 
 ## Что где
 

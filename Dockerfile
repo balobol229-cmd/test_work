@@ -19,4 +19,5 @@ COPY tests tests
 EXPOSE 8000
 
 # Миграции → тестовые данные (только в пустую базу) → сервер.
-CMD ["sh", "-c", "alembic upgrade head && python -m app.sources.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Порт берётся из PORT, если его задаёт хостинг (Render задаёт сам), иначе 8000.
+CMD ["sh", "-c", "alembic upgrade head && python -m app.sources.seed && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
