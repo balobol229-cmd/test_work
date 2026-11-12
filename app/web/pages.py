@@ -31,6 +31,8 @@ templates.env.filters["n"] = lambda v: f"{v:,}".replace(",", " ") if isinstanc
 templates.env.globals["place"] = views.place_label
 templates.env.globals["ACTIONS"] = views.ACTIONS
 templates.env.globals["can_delete"] = inv.can_delete
+# Версия стилей по времени изменения файла: браузер не покажет устаревший CSS после обновления.
+templates.env.globals["css_version"] = int((Path(__file__).parent.parent / "static" / "style.css").stat().st_mtime)
 
 REPLAYED = "Повтор: эта операция уже проведена, остатки не изменились"
 
