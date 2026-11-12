@@ -99,10 +99,20 @@ def _what(d: Document) -> str:
 
 
 @router.get("/", response_class=HTMLResponse)
-def stock_page(request: Request):
+def stock_page(request: Request, level: str = "sku"):
+    level = level if level in views.LEVELS else "sku"
     with SessionLocal() as s:
         overview = views.stock_overview(s)
-    return _render(request, "stock.html", "stock", o=overview, store=overview.store)
+    return _render(
+        request,
+        "stock.html",
+        "stock",
+        o=overview,
+        store=overview.store,
+        level=level,
+        levels=views.LEVELS,
+        groups=views.group_rows(overview, level),
+    )
 
 
 @router.get("/check", response_class=HTMLResponse)

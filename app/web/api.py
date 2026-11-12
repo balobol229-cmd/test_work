@@ -126,6 +126,30 @@ def get_stock(s: DB):
     }
 
 
+@router.get("/stock/levels", summary="Остатки на уровне: магазины, категории или артикулы")
+def get_stock_levels(s: DB, level: Annotated[str, Query(pattern="^(store|category|sku)$")] = "sku"):
+    o = views.stock_overview(s)
+    return {
+        "level": level,
+        "groups": [
+            {
+                "label": g.label,
+                "sub": g.sub,
+                "by_warehouse": [
+                    {"warehouse_id": w.id, "on_hand": g.cell(w.id).on_hand, "reserved": g.cell(w.id).reserved}
+                    for w in o.warehouses
+                ],
+                "in_transit_between_ff": g.transit_ff,
+                "fbo_in_transit": g.transit_mp,
+                "fbo_at_marketplace": g.mp,
+                "fbs_to_customer": g.customer,
+                "total": g.total,
+            }
+            for g in views.group_rows(o, level)
+        ],
+    }
+
+
 @router.get("/check", summary="Сверка: остатки, журнал и документы сходятся")
 def get_check(s: DB):
     rec = views.reconcile(s)

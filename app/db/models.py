@@ -78,16 +78,27 @@ class Store(Base):
     marketplace: Mapped[str] = mapped_column(String(20))  # WB; Ozon и Яндекс Маркет — вторая очередь
 
 
+class Category(Base):
+    """Категория товара. Нужна для уровня просмотра «Категории», как в ТЗ Ракеты."""
+
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+
+
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (UniqueConstraint("store_id", "sku"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"))
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"))
     sku: Mapped[str] = mapped_column(String(64))
     name: Mapped[str] = mapped_column(String(200))
 
     store: Mapped[Store] = relationship()
+    category: Mapped[Category | None] = relationship()
 
 
 class Warehouse(Base):

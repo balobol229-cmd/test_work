@@ -77,7 +77,14 @@
 
 <section class="card">
   <div class="card-head">
-    <h2>По складам</h2>
+    <div class="levels-head" id="levels">
+      <h2>По складам</h2>
+      <nav class="segmented" aria-label="Уровень просмотра">
+        {% for key, title in levels.items() %}
+        <a href="?level={{ key }}#levels" class="{{ 'on' if key == level }}" {% if key == level %}aria-current="true"{% endif %}>{{ title }}</a>
+        {% endfor %}
+      </nav>
+    </div>
     <span class="meta">Физически = доступно + резерв FBS</span>
   </div>
   <div class="table-wrap">
@@ -90,7 +97,7 @@
           <th class="wh-split"></th>
         </tr>
         <tr>
-          <th>Товар</th>
+          <th>{{ {"store": "Магазин", "category": "Категория", "sku": "Товар"}[level] }}</th>
           {% for w in o.warehouses %}
           <th class="n wh-split">Физически</th><th class="n">Резерв</th><th class="n">Доступно</th>
           {% endfor %}
@@ -99,10 +106,10 @@
         </tr>
       </thead>
       <tbody>
-        {% for r in o.rows %}
+        {% for r in groups %}
         <tr>
-          <td><span class="mono second">{{ r.product.sku }}</span>&nbsp; {{ r.product.name }}</td>
-          {% for w in o.warehouses %}{% set c = r.cells[w.id] %}
+          <td>{% if level == "sku" %}<span class="mono second">{{ r.sub }}</span>&nbsp; {{ r.label }}{% else %}{{ r.label }} <span class="muted">· {{ r.sub }}</span>{% endif %}</td>
+          {% for w in o.warehouses %}{% set c = r.cell(w.id) %}
           <td class="n wh-split {{ 'zero' if not c.on_hand }}">{{ c.on_hand }}</td>
           <td class="n {{ 'zero' if not c.reserved }}">{{ c.reserved }}</td>
           <td class="n {{ 'zero' if not c.available else 'key' }}">{{ c.available }}</td>
@@ -117,7 +124,7 @@
       </tbody>
       <tfoot>
         <tr>
-          <td>Итого</td>
+          <td>{{ "Итого по WB" if level == "store" else "Итого по магазину" }}</td>
           {% for w in o.warehouses %}
           {% set ns2 = namespace(h=0, r=0) %}
           {% for r in o.rows %}{% set ns2.h = ns2.h + r.cells[w.id].on_hand %}{% set ns2.r = ns2.r + r.cells[w.id].reserved %}{% endfor %}

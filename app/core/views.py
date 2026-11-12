@@ -125,7 +125,11 @@ IN_TRANSIT_SHOWN = 20
 
 def stock_overview(s: Session) -> Overview:
     snapshot(s)
-    products = list(s.scalars(select(Product).options(joinedload(Product.store)).order_by(Product.sku)))
+    products = list(
+        s.scalars(
+            select(Product).options(joinedload(Product.store), joinedload(Product.category)).order_by(Product.sku)
+        )
+    )
     stocks = s.scalars(select(Stock)).all()
     by_key = {(st.product_id, st.warehouse_id): st for st in stocks}
 
@@ -170,6 +174,58 @@ def stock_overview(s: Session) -> Overview:
     )
     store = products[0].store if products else s.scalar(select(Store).limit(1))
     return Overview(store, warehouses, rows, in_transit, in_transit_total)
+
+
+# ---------------------------------------------------------------------------
+# Уровни просмотра: магазины / категории / артикулы (как в ТЗ Ракеты)
+# ---------------------------------------------------------------------------
+
+LEVELS = {"store": "Магазины", "category": "Категории", "sku": "Артикулы"}
+
+
+@dataclass
+class Group:
+    """Строка таблицы на выбранном уровне: сумма строк-артикулов, которые в неё входят.
+
+    Каждый артикул попадает ровно в одну группу, поэтому итоги любого уровня равны итогам
+    по артикулам и один физический остаток не считается дважды.
+    """
+
+    key: str
+    label: str
+    sub: str
+    rows: list[Row]
+
+    def cell(self, wh_id: int) -> Cell:
+        return Cell(
+            sum(r.cells[wh_id].on_hand for r in self.rows),
+            sum(r.cells[wh_id].reserved for r in self.rows),
+        )
+
+    def __getattr__(self, name: str) -> int:
+        if name in ("transit_ff", "transit_mp", "mp", "customer", "waiting", "total", "on_hand", "available"):
+            return sum(getattr(r, name) for r in self.rows)
+        raise AttributeError(name)
+
+
+def group_rows(o: Overview, level: str) -> list[Group]:
+    if level not in LEVELS:
+        level = "sku"
+    groups: dict[str, Group] = {}
+    for r in o.rows:
+        p = r.product
+        if level == "store":
+            key, label, sub = f"s{p.store_id}", p.store.name, "Wildberries" if p.store.marketplace == "WB" else ""
+        elif level == "category":
+            key = f"c{p.category_id or 0}"
+            label, sub = (p.category.name if p.category else "Без категории"), ""
+        else:
+            key, label, sub = f"p{p.id}", p.name, p.sku
+        groups.setdefault(key, Group(key, label, sub, [])).rows.append(r)
+    for g in groups.values():
+        if level != "sku":
+            g.sub = g.sub or f"{len(g.rows)} арт."
+    return list(groups.values())
 
 
 # ---------------------------------------------------------------------------
