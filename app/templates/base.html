@@ -7,7 +7,7 @@
   <title>{% block title %}{% endblock %} · CheckStock</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css?v={{ css_version }}">
 </head>
 <body>
@@ -17,6 +17,7 @@
       <div class="brand-name">Check<b>Stock</b></div>
       {% if store %}<div class="brand-store">{{ store.name }} · {{ "Wildberries" if store.marketplace == "WB" else store.marketplace }}</div>{% endif %}
     </div>
+    <div class="side-nav">
     <nav>
       <p class="nav-label">Учёт</p>
       <div class="nav">
@@ -33,6 +34,7 @@
         <a href="/docs">{{ icon("code") }}API</a>
       </div>
     </nav>
+    </div>
     <div class="side-foot">
       <form method="post" action="/reset" data-confirm="Сбросить все данные к тестовым из задания? Операции и история будут удалены." onsubmit="return confirm(this.dataset.confirm)">
         <button class="btn sm ghost reset">{{ icon("reset") }}Сбросить к тестовым данным</button>

@@ -34,13 +34,18 @@
   --seg-customer: #d8cfc4;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --sans: "Manrope", system-ui, -apple-system, sans-serif;
+  --serif: "Instrument Serif", "Times New Roman", serif;  /* заголовки и крупные цифры */
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
 * { box-sizing: border-box; }
 
 html, body { margin: 0; }
+
+/* iOS Safari сам увеличивает часть текста («text autosizing»), из-за этого подписи форм
+   были крупнее полей. Запрещаем: размеры шрифта задаём только мы. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 body {
   background: var(--bg);
@@ -78,6 +83,7 @@ a { color: inherit; }
 .brand-name b { font-weight: 500; color: var(--accent-ink); }
 .brand-store { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 16px; }
 
+.side-nav { display: flex; flex-direction: column; gap: 24px; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav a {
   display: flex;
@@ -296,6 +302,7 @@ tfoot td { height: 40px; border-top: 1px solid var(--line-strong); font-weight: 
 /* --- Формы и кнопки -------------------------------------------------------- */
 
 .grid { display: grid; gap: 16px; }
+.grid > * { min-width: 0; }  /* дочерние блоки сетки не растягивают её шире экрана */
 .ops { grid-template-columns: 360px minmax(0, 1fr); align-items: start; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
 
@@ -303,6 +310,8 @@ tfoot td { height: 40px; border-top: 1px solid var(--line-strong); font-weight: 
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 label { display: grid; gap: 4px; color: var(--text-2); font-size: 13px; }
 input, select {
+  max-width: 100%;
+  min-width: 0;
   height: 36px;
   padding: 0 10px;
   border: 1px solid var(--line-strong);
@@ -451,6 +460,11 @@ form.inline { display: inline; margin: 0; }
 .flow2 { display: grid; grid-template-columns: 1fr 24px 1fr 24px 1.2fr 24px 1.1fr 24px 1.1fr; gap: 8px 0; align-items: stretch; }
 .flow2 .arrow { align-self: center; justify-self: center; color: #2f6b4f; }
 .flow2 .arrow svg { width: 20px; height: 12px; display: block; }
+.flow2 .col-5 { grid-column: 5; }
+.flow2 .col-9 { grid-column: 9; }
+.flow2 .col-4-8 { grid-column: 4 / 8; }
+.flow2 .col-8-10 { grid-column: 8 / 10; }
+.sys-cols { margin-top: 16px; }
 .flow2 .down { display: flex; justify-content: center; color: #2f6b4f; height: 24px; }
 .flow2 .down svg { width: 12px; height: 24px; }
 .sys-important { margin: 20px 0 0; font-size: 13px; color: var(--text-2); }
@@ -464,23 +478,73 @@ form.inline { display: inline; margin: 0; }
 .principle .quote { margin: 0 0 12px; padding: 12px 14px; border-left: 2px solid #3d7a5a; background: #f6faf7; color: var(--text); border-radius: 0 8px 8px 0; }
 
 @media (max-width: 1100px) {
-  .ops { grid-template-columns: 1fr; }
+  .ops { grid-template-columns: minmax(0, 1fr); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .flow, .sys-cols { flex-direction: column; grid-template-columns: 1fr; }
   .flow .arrow { transform: rotate(90deg); }
-  .flow2 { grid-template-columns: 1fr; }
+  .flow2 { grid-template-columns: minmax(0, 1fr); }
+  /* На узком экране блоки схемы идут столбиком: сбрасываем привязку к колонкам 4–10,
+     иначе сетка создаёт лишние колонки и сжимает блоки до 28 px. */
+  .flow2 > *,
+  .flow2 .col-5, .flow2 .col-9, .flow2 .col-4-8, .flow2 .col-8-10 { grid-column: 1 / -1; }
+  .flow2 .down { display: none; }
   .flow2 .arrow { transform: rotate(90deg); }
 }
 
 @media (max-width: 760px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
-  .stats { grid-template-columns: minmax(0, 1fr); }
-  .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; }
-  .nav { flex-direction: row; flex-wrap: wrap; }
+  /* Четыре показателя по два в ряд: на телефоне они не занимают весь первый экран. */
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat { padding: 12px 14px; }
+  .stat-value { font-size: 24px; line-height: 28px; }
+  .card-head { flex-wrap: wrap; }
+
+  /* Боковое меню превращается в шапку: логотип сверху, под ним одна строка ссылок,
+     которая листается пальцем вбок. Шапка прилипает к верху при прокрутке. */
+  .side {
+    position: sticky; top: 0; z-index: 10;
+    height: auto; gap: 8px; padding: 12px 16px 8px;
+    border-right: 0; border-bottom: 1px solid var(--line);
+  }
+  .side-nav {
+    flex-direction: row; gap: 2px;
+    overflow-x: auto; scrollbar-width: none;
+    margin: 0 -16px; padding: 0 16px;  /* ссылки уезжают до края экрана, а не обрезаются */
+  }
+  .side-nav::-webkit-scrollbar { display: none; }
+  .nav { flex-direction: row; gap: 2px; }
+  .nav a { flex: none; white-space: nowrap; height: 36px; }
   .nav-label, .side-foot { display: none; }
+
+  /* 16px в полях: при меньшем шрифте iPhone сам приближает страницу при касании поля.
+     44px — минимальная высота, в которую удобно попадать пальцем. */
+  input, select { font-size: 16px; height: 44px; }
+  .btn { height: 44px; }
+  .btn.sm { height: 36px; }
+  .rename { flex-wrap: wrap; }
+  .rename input { width: 100%; }
   .main { padding: 16px 16px 48px; }
   .head { flex-direction: column; }
   .where-row { grid-template-columns: 1fr; gap: 8px; }
   .where-total { text-align: left; }
   .form-row { grid-template-columns: 1fr; }
+}
+
+/* --- Шрифт заголовков ---------------------------------------------------------------
+   Instrument Serif — тонкий контрастный сериф для заголовков, названий и крупных цифр.
+   У серифа мельче глаз шрифта, поэтому размеры чуть больше, чем были у гротеска. */
+.brand-name { font: 400 24px/1 var(--serif); letter-spacing: 0; }
+.brand-name b { font-weight: 400; }  /* у Instrument Serif одно начертание, без псевдожирного */
+.head h1 { font: 400 40px/1.05 var(--serif); letter-spacing: -0.01em; }
+.card-head h2 { font: 400 22px/1.15 var(--serif); }
+.stat-value { font: 400 38px/1 var(--serif); }
+.stat-value small { font-family: var(--sans); }
+.pname { font: 400 18px/1.2 var(--serif); }
+.where-total b { font: 400 22px/1 var(--serif); }
+.sys h2 { font-family: var(--serif); font-weight: 400; font-size: 34px; line-height: 1.1; }
+.principle h3 { font: 400 22px/1.15 var(--serif); }
+
+@media (max-width: 760px) {
+  .head h1 { font-size: 34px; }
+  .stat-value { font-size: 32px; line-height: 1; }
 }

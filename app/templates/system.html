@@ -50,11 +50,11 @@
     {{ arrow_right() }}
     <div class="box result"><h3>Адаптированный</h3><p>прогноз продаж</p></div>
 
-    <div style="grid-column: 5">{{ arrow_down() }}</div>
-    <div style="grid-column: 9">{{ arrow_down() }}</div>
+    <div class="col-5">{{ arrow_down() }}</div>
+    <div class="col-9">{{ arrow_down() }}</div>
 
-    <div class="box plan" style="grid-column: 4 / 8"><h3>План закупок</h3><p>По исходному спросу и запасам</p></div>
-    <div class="box plan" style="grid-column: 8 / 10"><h3>Расчёт будущего стока</h3><p>Сценарий спроса и адаптации</p></div>
+    <div class="box plan col-4-8"><h3>План закупок</h3><p>По исходному спросу и запасам</p></div>
+    <div class="box plan col-8-10"><h3>Расчёт будущего стока</h3><p>Сценарий спроса и адаптации</p></div>
   </div>
 
   <p class="flow-title">03&nbsp;&nbsp; РАСЧЁТ ЗАКУПКИ</p>
@@ -75,7 +75,7 @@
   <p class="sys-important"><b>Важно:</b> адаптированный прогноз ограничивает реализуемые продажи доступным стоком; исходный прогноз остаётся источником планового спроса для закупок.</p>
 </section>
 
-<div class="sys-cols" style="margin-top: 16px">
+<div class="sys-cols">
   <section class="card principle">
     <h3>В первой рабочей версии</h3>
     <p class="quote">Все действующие магазины WB одновременно. Вторая очередь: Ozon, Яндекс Маркет, другие площадки</p>
