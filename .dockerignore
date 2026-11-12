@@ -1,0 +1,6 @@
+.venv
+.git
+**/__pycache__
+.pytest_cache
+.DS_Store
+VIDEO_NOTES.md

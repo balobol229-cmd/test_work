@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, delete_button %}
+{% block title %}История{% endblock %}
+{% block heading %}История операций{% endblock %}
+{% block sub %}Какой товар, сколько единиц, откуда и куда. Записи только добавляются{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h2>Движения</h2>
+    <form method="get" class="rename">
+      <select name="product_id" onchange="this.form.submit()" aria-label="Товар">
+        <option value="">Все товары</option>
+        {% for p in products %}<option value="{{ p.id }}" {{ "selected" if p.id == product_id }}>{{ p.sku }} · {{ p.name }}</option>{% endfor %}
+      </select>
+      <noscript><button class="btn sm">Показать</button></noscript>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Время</th><th>Операция</th><th>Товар</th><th class="n">Кол-во</th><th>Откуда</th><th></th><th>Куда</th><th class="n">Документ</th><th></th></tr></thead>
+      <tbody>
+      {% for m in moves %}
+        <tr>
+          <td class="mono muted">{{ m.created_at.astimezone().strftime("%d.%m %H:%M:%S") }}</td>
+          <td>{{ ACTIONS.get(m.action, m.action) }}</td>
+          <td><span class="mono second">{{ m.product.sku }}</span>&nbsp; {{ m.product.name }}</td>
+          <td class="n">{{ m.qty }}</td>
+          <td class="second">{{ place(m.from_loc, m.from_warehouse) }}</td>
+          <td>{{ icon("arrow") }}</td>
+          <td>{{ place(m.to_loc, m.to_warehouse) }}</td>
+          <td class="n muted">№{{ m.document_id }}{% if m.document.order_ref %} · {{ m.document.order_ref }}{% endif %}</td>
+          <td class="n">
+            {%- if m.action in ("receipt", "transfer_send", "fbs_reserve", "fbo_ship") -%}
+              {%- if can_delete(m.document) -%}
+                {{ delete_button(m.document, back="/history") }}
+              {%- elif m.document.status == "cancelled" -%}
+                <span class="tag">отменено</span>
+              {%- endif -%}
+            {%- endif -%}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="muted">Движений нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

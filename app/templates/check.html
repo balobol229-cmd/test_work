@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}Сверка{% endblock %}
+{% block heading %}Сверка учёта{% endblock %}
+{% block sub %}Три независимых источника должны совпадать после каждой операции{% endblock %}
+{% block content %}
+<section class="card">
+  {% for c in rec.checks %}
+  <div class="check-row">
+    {{ icon("check", "yes") if c.ok else icon("x", "no") }}
+    <div>
+      <div>{{ c.title }}</div>
+      {% if c.problems %}<ul>{% for p in c.problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card principle">
+  <h3>Что сверяется</h3>
+  <ul>
+    <li><b>Остатки</b> — таблица <span class="mono">stock</span>: сколько физически на каждом ФФ и сколько в резерве. Её блокирует каждая операция.</li>
+    <li><b>Журнал движений</b> — <span class="mono">movements</span>: каждая операция пишет «откуда → куда, сколько». Баланс любого места равен сумме входов минус выходов.</li>
+    <li><b>Документы</b> — <span class="mono">documents</span>: перемещения в пути, поставки FBO, заказы FBS в своих статусах.</li>
+  </ul>
+  <p>Всего принято {{ rec.units | n }} шт. Каждая из них числится ровно в одном месте: на ФФ, в пути, на складе WB или у клиента.
+     Та же сверка запускается в тестах после каждого шага сценария. JSON — <a href="/api/check">/api/check</a></p>
+</section>
+{% endblock %}

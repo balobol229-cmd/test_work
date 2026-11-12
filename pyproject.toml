@@ -1,0 +1,31 @@
+[project]
+name = "checkstock"
+version = "0.1.0"
+description = "CheckStock: где сейчас товар — остатки по складам ФФ, резервы FBS, отгрузки FBO"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.18",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # Предупреждение Starlette о будущей замене httpx в TestClient, к нашему коду не относится
+    "ignore:.*starlette.testclient.*",
+]

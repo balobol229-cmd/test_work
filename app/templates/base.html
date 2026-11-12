@@ -1,0 +1,95 @@
+{% from "_ui.html" import icon %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} · CheckStock</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-name">Check<b>Stock</b></div>
+      {% if store %}<div class="brand-store">{{ store.name }} · {{ "Wildberries" if store.marketplace == "WB" else store.marketplace }}</div>{% endif %}
+    </div>
+    <nav>
+      <p class="nav-label">Учёт</p>
+      <div class="nav">
+        <a href="/" class="{{ 'on' if page == 'stock' }}">{{ icon("package") }}Остатки</a>
+        <a href="/operations" class="{{ 'on' if page == 'operations' }}">{{ icon("swap") }}Операции</a>
+        <a href="/warehouses" class="{{ 'on' if page == 'warehouses' }}">{{ icon("warehouse") }}Склады ФФ</a>
+        <a href="/history" class="{{ 'on' if page == 'history' }}">{{ icon("history") }}История</a>
+      </div>
+    </nav>
+    <nav>
+      <p class="nav-label">О прототипе</p>
+      <div class="nav">
+        <a href="/system" class="{{ 'on' if page == 'system' }}">{{ icon("workflow") }}Как устроено</a>
+        <a href="/docs">{{ icon("code") }}API</a>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <form method="post" action="/reset" onsubmit="return confirm('Сбросить все данные к тестовым из задания? Операции и история будут удалены.')">
+        <button class="btn sm ghost reset">{{ icon("reset") }}Сбросить к тестовым данным</button>
+      </form>
+      <div>Python · FastAPI · PostgreSQL</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="head">
+      <div>
+        <h1>{% block heading %}{% endblock %}</h1>
+        <p class="sub">{% block sub %}{% endblock %}</p>
+      </div>
+      <a class="stamp {{ '' if rec.ok else 'bad' }}" href="/check" title="Остатки, журнал движений и документы сверяются после каждой операции">
+        <span class="dot"></span>
+        {% if rec.ok %}Остатки сходятся · {{ rec.units | n }} шт. на учёте{% else %}Расхождение в учёте{% endif %}
+      </a>
+    </header>
+
+    {% if flash %}
+    <div class="note {{ flash.kind }}" role="status">
+      {{ icon({"ok": "check", "warn": "alert", "error": "alert"}.get(flash.kind, "info")) }}
+      <div class="note-body">
+        {{ flash.text }}
+        {% if flash.shortage and flash.shortage.options and flash.retry %}
+        <div class="note-actions">
+          {% for o in flash.shortage.options %}
+            {% if o.kind == "switch" %}
+            <form method="post" action="/operations/fbo" class="inline">
+              <input type="hidden" name="product_id" value="{{ flash.retry.product_id }}">
+              <input type="hidden" name="warehouse_id" value="{{ o.warehouse_id }}">
+              <input type="hidden" name="qty" value="{{ flash.retry.qty }}">
+              <input type="hidden" name="key" value="{{ new_key() }}">
+              <button class="btn sm">{{ o.text }}</button>
+            </form>
+            {% elif o.kind == "transfer" %}
+              {% for p in o.plan %}
+              <form method="post" action="/operations/transfer" class="inline">
+                <input type="hidden" name="product_id" value="{{ flash.retry.product_id }}">
+                <input type="hidden" name="from_id" value="{{ p.warehouse_id }}">
+                <input type="hidden" name="to_id" value="{{ flash.shortage.warehouse_id }}">
+                <input type="hidden" name="qty" value="{{ p.qty }}">
+                <input type="hidden" name="key" value="{{ new_key() }}">
+                <button class="btn sm ghost">Переместить {{ p.qty }} шт. с «{{ p.warehouse }}» на «{{ flash.shortage.warehouse }}»</button>
+              </form>
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

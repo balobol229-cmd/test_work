@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}Склады ФФ{% endblock %}
+{% block heading %}Склады ФФ{% endblock %}
+{% block sub %}Удаление не стирает данные: остаток и история остаются на складе{% endblock %}
+{% block content %}
+{% set active = all_warehouses | selectattr("is_active") | list %}
+{% set archived = all_warehouses | rejectattr("is_active") | list %}
+
+<section class="card">
+  <div class="card-head"><h2>Действующие</h2><span class="meta">{{ active | length }}</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Склад</th><th class="n">Физически</th><th class="n">В резерве</th><th>Переименовать</th><th></th></tr></thead>
+      <tbody>
+      {% for w in active %}
+        <tr>
+          <td>{{ w.name }}</td>
+          <td class="n {{ 'zero' if not units[w.id] }}">{{ units[w.id] }} шт.</td>
+          <td class="n {{ 'zero' if not reserved[w.id] }}">{{ reserved[w.id] }} шт.</td>
+          <td>
+            <form method="post" action="/warehouses/{{ w.id }}/rename" class="rename">
+              <input name="name" value="{{ w.name }}" aria-label="Новое название" required maxlength="100">
+              <button class="btn sm">Сохранить</button>
+            </form>
+          </td>
+          <td class="n">
+            <form method="post" action="/warehouses/{{ w.id }}/delete" class="inline"
+                  onsubmit="return confirm('Удалить склад «{{ w.name }}»? Остаток и история сохранятся.')">
+              <button class="btn sm ghost danger">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <form method="post" action="/warehouses" class="card-body rename" style="padding-top: 16px; border-top: 1px solid var(--line)">
+    <input name="name" placeholder="Название нового склада" required maxlength="100">
+    <button class="btn primary sm">Добавить склад</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Удалённые</h2><span class="meta">остаток можно вывезти перемещением</span></div>
+  {% for w in archived %}
+  <div class="doc">
+    <div>
+      <div class="doc-title">{{ w.name }}<span class="tag">удалён {{ w.archived_at.strftime("%d.%m.%Y %H:%M") }}</span></div>
+      <div class="doc-meta">
+        {% if units[w.id] %}Числится {{ units[w.id] }} шт. Видно на экране остатков и в истории{% else %}Остатка нет, история сохранена{% endif %}
+      </div>
+    </div>
+    <div class="doc-actions">
+      {% if units[w.id] %}<a class="btn sm" href="/operations">Вывезти перемещением</a>{% endif %}
+      <a class="btn sm ghost" href="/history">История</a>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty">Удалённых складов нет</div>
+  {% endfor %}
+</section>
+{% endblock %}

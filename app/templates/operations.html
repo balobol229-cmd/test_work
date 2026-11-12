@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, wh_name, doc_name, delete_button %}
+{% block title %}Операции{% endblock %}
+{% block heading %}Операции{% endblock %}
+{% block sub %}Приход, перемещения между ФФ, заказы FBS и поставки FBO{% endblock %}
+
+{% macro product_select() -%}
+<label>Товар
+  <select name="product_id" required>
+    {% for p in products %}<option value="{{ p.id }}">{{ p.sku }} · {{ p.name }}</option>{% endfor %}
+  </select>
+</label>
+{%- endmacro %}
+
+{% macro wh_select(name, label, items, pick=0) -%}
+<label>{{ label }}
+  <select name="{{ name }}" required>
+    {% for w in items %}<option value="{{ w.id }}" {{ "selected" if loop.index0 == pick }}>{{ w.name }}{{ " (удалён)" if not w.is_active }}</option>{% endfor %}
+  </select>
+</label>
+{%- endmacro %}
+
+{% macro qty_input() -%}
+<label>Количество, шт.<input type="number" name="qty" min="1" step="1" value="1" required></label>
+{%- endmacro %}
+
+{% block content %}
+<div class="grid ops">
+  <div class="stack">
+    <section class="card">
+      <div class="card-head"><h2>Приход</h2><span class="meta">от поставщика на ФФ</span></div>
+      <form method="post" action="/operations/receipt" class="form card-body">
+        <input type="hidden" name="key" value="{{ new_key() }}">
+        {{ product_select() }}
+        <div class="form-row">{{ wh_select("warehouse_id", "На склад", active_warehouses) }}{{ qty_input() }}</div>
+        <button class="btn primary">Провести приход</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Перемещение</h2><span class="meta">между ФФ</span></div>
+      <form method="post" action="/operations/transfer" class="form card-body">
+        <input type="hidden" name="key" value="{{ new_key() }}">
+        {{ product_select() }}
+        {% set sources = active_warehouses + (all_warehouses | rejectattr("is_active") | list) %}
+        <div class="form-row">{{ wh_select("from_id", "Откуда", sources) }}{{ wh_select("to_id", "Куда", active_warehouses, pick=1) }}</div>
+        {{ qty_input() }}
+        <button class="btn primary">Отправить</button>
+      </form>
+    </section>
+
+    <section class="card" id="fbs-form">
+      <div class="card-head"><h2>Заказ FBS</h2><span class="meta">резерв на ФФ до отправки</span></div>
+      <form method="post" action="/operations/fbs" class="form card-body">
+        <input type="hidden" name="key" value="{{ new_key() }}">
+        {{ product_select() }}
+        <div class="form-row">{{ wh_select("warehouse_id", "С какого ФФ", active_warehouses) }}{{ qty_input() }}</div>
+        <label>Номер заказа WB<input name="order_ref" placeholder="Необязательно" maxlength="64"></label>
+        <button class="btn primary">Зарезервировать</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Поставка FBO</h2><span class="meta">на склад WB</span></div>
+      <form method="post" action="/operations/fbo" class="form card-body">
+        <input type="hidden" name="key" value="{{ new_key() }}">
+        {{ product_select() }}
+        <div class="form-row">{{ wh_select("warehouse_id", "С какого ФФ", active_warehouses) }}{{ qty_input() }}</div>
+        <button class="btn primary">Отгрузить</button>
+      </form>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="card" id="fbs">
+      <div class="card-head"><h2>Заказы FBS</h2><span class="meta">{{ ops.fbs | length }} в работе</span></div>
+      {% for item in ops.fbs %}{% set d = item.document %}
+      <div class="doc">
+        <div>
+          <div class="doc-title">{{ doc_name(d) }}</div>
+          <div class="doc-meta">
+            <span class="mono">{{ d.product.sku }}</span> · {{ d.qty }} шт. · {{ wh_name(d.from_warehouse) }} ·
+            {% if d.status == "waiting" %}<span class="status waiting">ждёт товара</span>{% else %}<span class="status reserved">в резерве</span>{% endif %}
+          </div>
+        </div>
+        <div class="doc-actions">
+          {% if d.status == "reserved" %}
+          <form method="post" action="/operations/fbs/{{ d.id }}/ship" class="inline"><button class="btn sm accent">Отправить клиенту</button></form>
+          {% endif %}
+          {{ delete_button(d, confirm_text="Удалить заказ? Резерв снимется, товар снова станет доступен.") }}
+        </div>
+        {% if item.shortage %}{% set sh = item.shortage %}
+        <div class="shortage">
+          <p>{{ sh.message }} Заказ сохранён и ждёт решения</p>
+          <div class="note-actions">
+            {% for o in sh.options %}
+              {% if o.kind == "switch" %}
+              <form method="post" action="/operations/fbs/{{ d.id }}/reserve" class="inline">
+                <input type="hidden" name="warehouse_id" value="{{ o.warehouse_id }}">
+                <button class="btn sm primary">{{ o.text }}</button>
+              </form>
+              {% elif o.kind == "split" %}
+              <form method="post" action="/operations/fbs/{{ d.id }}/split" class="inline"><button class="btn sm primary">{{ o.text }}</button></form>
+              {% elif o.kind == "transfer" %}
+                {% for w_id, w_name, q in o.plan %}
+                <form method="post" action="/operations/transfer" class="inline">
+                  <input type="hidden" name="product_id" value="{{ d.product_id }}">
+                  <input type="hidden" name="from_id" value="{{ w_id }}">
+                  <input type="hidden" name="to_id" value="{{ d.from_warehouse_id }}">
+                  <input type="hidden" name="qty" value="{{ q }}">
+                  <input type="hidden" name="key" value="{{ new_key() }}">
+                  <button class="btn sm">Довезти {{ q }} шт. с «{{ w_name }}»</button>
+                </form>
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+            <form method="post" action="/operations/fbs/{{ d.id }}/reserve" class="inline"><button class="btn sm ghost">Проверить остаток снова</button></form>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="empty">Открытых заказов нет</div>
+      {% endfor %}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Перемещения в пути</h2><span class="meta">{{ ops.transfers | length }}</span></div>
+      {% for d in ops.transfers %}
+      <div class="doc">
+        <div>
+          <div class="doc-title">{{ doc_name(d) }}</div>
+          <div class="doc-meta route"><span class="mono">{{ d.product.sku }}</span> · {{ d.qty }} шт. · {{ wh_name(d.from_warehouse) }} {{ icon("arrow") }} {{ wh_name(d.to_warehouse) }}</div>
+        </div>
+        <div class="doc-actions">
+          <form method="post" action="/operations/transfer/{{ d.id }}/receive" class="inline"><button class="btn sm accent">Принять на «{{ d.to_warehouse.name }}»</button></form>
+          {{ delete_button(d, confirm_text="Отменить перемещение? Товар вернётся на склад отправки.") }}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">Ничего не едет</div>
+      {% endfor %}
+    </section>
+
+    <section class="card" id="fbo">
+      <div class="card-head"><h2>Поставки FBO в пути</h2><span class="meta">{{ ops.fbo | length }}</span></div>
+      {% for d in ops.fbo %}
+      <div class="doc">
+        <div>
+          <div class="doc-title">{{ doc_name(d) }}</div>
+          <div class="doc-meta route"><span class="mono">{{ d.product.sku }}</span> · {{ d.qty }} шт. · {{ wh_name(d.from_warehouse) }} {{ icon("arrow") }} склад WB</div>
+        </div>
+        <div class="doc-actions">
+          <form method="post" action="/operations/fbo/{{ d.id }}/accept" class="inline"><button class="btn sm accent">Принята складом WB</button></form>
+          {{ delete_button(d, confirm_text="Отменить поставку FBO? Товар вернётся на склад.") }}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">Поставок в пути нет</div>
+      {% endfor %}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Завершённые</h2><a class="meta" href="/history">Вся история</a></div>
+      {% set labels = {"done": "проведён", "received": "принято", "accepted": "принята складом WB", "shipped": "отправлен клиенту", "cancelled": "отменён"} %}
+      <div class="table-wrap">
+        <table>
+          <tbody>
+          {% for d in ops.recent %}
+            <tr>
+              <td>{{ doc_name(d) }}</td>
+              <td><span class="mono second">{{ d.product.sku }}</span></td>
+              <td class="n">{{ d.qty }} шт.</td>
+              <td class="second">
+                {%- if d.from_warehouse %}{{ d.from_warehouse.name }}{% endif -%}
+                {%- if d.from_warehouse and d.to_warehouse %} → {% endif -%}
+                {%- if d.to_warehouse %}{{ d.to_warehouse.name }}{% endif -%}
+              </td>
+              <td class="muted">{{ "удалён" if d.kind == "receipt" and d.status == "cancelled" else labels[d.status] }}</td>
+              <td class="n">{% if can_delete(d) %}{{ delete_button(d, confirm_text="Удалить приход? Товар спишется со склада обратной записью, история сохранится.") }}{% endif %}</td>
+            </tr>
+          {% else %}
+            <tr><td class="muted">Пока ничего</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

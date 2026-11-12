@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, wh_name %}
+{% block title %}Остатки{% endblock %}
+{% block heading %}Остатки{% endblock %}
+{% block sub %}{{ o.rows | length }} товара на {{ o.warehouses | selectattr("is_active") | list | length }} складах ФФ. Каждая единица числится в одном месте{% endblock %}
+{% block content %}
+
+{% set waiting = o.rows | selectattr("waiting") | list %}
+{% if waiting %}
+<div class="note warn">
+  {{ icon("alert") }}
+  <div class="note-body">
+    Ждут товара: {% for r in waiting %}{{ r.product.sku }} · {{ r.waiting }} шт.{{ ", " if not loop.last }}{% endfor %}.
+    Спрос сохранён, заказы не потеряны. <a href="/operations#fbs">Собрать заказы</a>
+  </div>
+</div>
+{% endif %}
+
+<section class="stats">
+  <div class="card stat">
+    <div class="stat-label">На складах ФФ</div>
+    <div class="stat-value">{{ o.total("on_hand") | n }}<small>шт.</small></div>
+    <div class="stat-note">физически, вместе с резервом</div>
+  </div>
+  <div class="card stat key">
+    <div class="stat-label">Доступно к продаже</div>
+    <div class="stat-value">{{ o.total("available") | n }}<small>шт.</small></div>
+    <div class="stat-note">на складах минус резерв FBS</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">В резерве FBS</div>
+    <div class="stat-value">{{ o.total("reserved") | n }}<small>шт.</small></div>
+    <div class="stat-note">ждут отправки клиенту</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">В пути</div>
+    <div class="stat-value">{{ (o.total("transit_ff") + o.total("transit_mp")) | n }}<small>шт.</small></div>
+    <div class="stat-note">{{ o.total("transit_ff") }} между ФФ, {{ o.total("transit_mp") }} на склад WB</div>
+  </div>
+</section>
+
+{% set ns = namespace(max=1) %}
+{% for r in o.rows %}{% if r.total > ns.max %}{% set ns.max = r.total %}{% endif %}{% endfor %}
+
+<section class="card">
+  <div class="card-head">
+    <h2>Где товар</h2>
+    <div class="legend">
+      {% for w in o.warehouses %}<span><i class="seg-free-{{ loop.index0 % 3 }}"></i>{{ w.name }}{{ " (удалён)" if not w.is_active }}</span>{% endfor %}
+      <span><i class="seg-reserve"></i>Резерв FBS</span>
+      <span><i class="seg-transit"></i>Между ФФ</span>
+      <span><i class="seg-mp-transit"></i>FBO в пути</span>
+      <span><i class="seg-mp"></i>Склад WB</span>
+      <span><i class="seg-customer"></i>К клиенту</span>
+    </div>
+  </div>
+  <div class="where">
+    {% for r in o.rows %}
+    <div class="where-row">
+      <div>
+        <div class="sku">{{ r.product.sku }}</div>
+        <div class="pname">{{ r.product.name }}</div>
+      </div>
+      <div class="bar">
+        {% set segs = r.segments(o.warehouses) %}
+        {% for cls, label, q in segs %}
+          <div class="seg {{ cls }}" style="width: {{ (q / ns.max * 100) | round(2) }}%" title="{{ label }}: {{ q }} шт.">{{ q }}</div>
+        {% else %}
+          <div class="bar-empty">Нет на учёте</div>
+        {% endfor %}
+      </div>
+      <div class="where-total"><b>{{ r.total | n }}</b> шт.</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>По складам</h2>
+    <span class="meta">Физически = доступно + резерв FBS</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr class="group">
+          <th></th>
+          {% for w in o.warehouses %}<th colspan="3" class="wh-split {{ 'gone' if not w.is_active }}">{{ wh_name(w) }}</th>{% endfor %}
+          <th colspan="4" class="wh-split">Вне складов ФФ</th>
+          <th class="wh-split"></th>
+        </tr>
+        <tr>
+          <th>Товар</th>
+          {% for w in o.warehouses %}
+          <th class="n wh-split">Физически</th><th class="n">Резерв</th><th class="n">Доступно</th>
+          {% endfor %}
+          <th class="n wh-split">Между ФФ</th><th class="n">FBO в пути</th><th class="n">Склад WB</th><th class="n">К клиенту</th>
+          <th class="n wh-split">Всего</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in o.rows %}
+        <tr>
+          <td><span class="mono second">{{ r.product.sku }}</span>&nbsp; {{ r.product.name }}</td>
+          {% for w in o.warehouses %}{% set c = r.cells[w.id] %}
+          <td class="n wh-split {{ 'zero' if not c.on_hand }}">{{ c.on_hand }}</td>
+          <td class="n {{ 'zero' if not c.reserved }}">{{ c.reserved }}</td>
+          <td class="n {{ 'zero' if not c.available else 'key' }}">{{ c.available }}</td>
+          {% endfor %}
+          <td class="n wh-split {{ 'zero' if not r.transit_ff }}">{{ r.transit_ff }}</td>
+          <td class="n {{ 'zero' if not r.transit_mp }}">{{ r.transit_mp }}</td>
+          <td class="n {{ 'zero' if not r.mp }}">{{ r.mp }}</td>
+          <td class="n {{ 'zero' if not r.customer }}">{{ r.customer }}</td>
+          <td class="n wh-split total">{{ r.total }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Итого</td>
+          {% for w in o.warehouses %}
+          {% set ns2 = namespace(h=0, r=0) %}
+          {% for r in o.rows %}{% set ns2.h = ns2.h + r.cells[w.id].on_hand %}{% set ns2.r = ns2.r + r.cells[w.id].reserved %}{% endfor %}
+          <td class="n wh-split">{{ ns2.h }}</td><td class="n">{{ ns2.r }}</td><td class="n">{{ ns2.h - ns2.r }}</td>
+          {% endfor %}
+          <td class="n wh-split">{{ o.total("transit_ff") }}</td>
+          <td class="n">{{ o.total("transit_mp") }}</td>
+          <td class="n">{{ o.total("mp") }}</td>
+          <td class="n">{{ o.total("customer") }}</td>
+          <td class="n wh-split">{{ o.total("total") }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>В пути между ФФ</h2>
+    <span class="meta">числится в пути до приёмки на складе-получателе</span>
+  </div>
+  {% for d in o.in_transit %}
+  <div class="doc">
+    <div>
+      <div class="doc-title"><span class="mono second">{{ d.product.sku }}</span>&nbsp; {{ d.qty }} шт.</div>
+      <div class="doc-meta route">{{ wh_name(d.from_warehouse) }} {{ icon("arrow") }} {{ wh_name(d.to_warehouse) }} · перемещение №{{ d.id }}</div>
+    </div>
+    <div class="doc-actions">
+      <form method="post" action="/operations/transfer/{{ d.id }}/receive" class="inline"><button class="btn sm">Принять</button></form>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty">Сейчас ничего не едет между складами</div>
+  {% endfor %}
+</section>
+{% endblock %}

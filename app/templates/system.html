@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% from "_ui.html" import arrow_right, arrow_down %}
+{% block title %}Как устроено{% endblock %}
+{% block heading %}Как устроено{% endblock %}
+{% block sub %}Схема системы снабжения из ТЗ Ракеты и то, какую её часть закрывает CheckStock{% endblock %}
+{% block content %}
+
+<section class="card sys">
+  <p class="sys-kicker">ЛОГИКА ПРОДУКТА / БЛОК-СХЕМЫ</p>
+  <h2>Как работает система</h2>
+  <div class="sys-rule"></div>
+  <p class="sys-lead">Три схемы на уровне краткого ТЗ. Под каждым блоком первой схемы — где он в коде CheckStock</p>
+
+  <p class="flow-title">01&nbsp; АРХИТЕКТУРА И ПОТОК ДАННЫХ</p>
+  <div class="flow">
+    <div class="box">
+      <h3>ИСТОЧНИКИ</h3>
+      <p>API WB · справочники<br>поставки · цены</p>
+      <div class="impl"><code>app/sources</code><br>тестовые данные задания. Сюда же встанет загрузка из API WB</div>
+    </div>
+    {{ arrow_right() }}
+    <div class="box">
+      <h3>ЕДИНАЯ БАЗА</h3>
+      <p>товары · магазины<br>история · стоки</p>
+      <div class="impl"><code>app/db</code> · PostgreSQL<br>магазины, товары, склады ФФ, остатки, документы, журнал движений</div>
+    </div>
+    {{ arrow_right() }}
+    <div class="box core">
+      <h3>РАСЧЁТНОЕ ЯДРО</h3>
+      <p>прогноз · DIFF · остатки<br>потребность в закупке</p>
+      <div class="impl"><code>app/core</code><br>остатки, резервы FBS, перемещения, FBO, нехватка и сверка</div>
+    </div>
+    {{ arrow_right() }}
+    <div class="box">
+      <h3>ВЕБ-ИНТЕРФЕЙС</h3>
+      <p>три режима: магазин /<br>категория / артикул</p>
+      <div class="impl"><code>app/web</code> · FastAPI<br>страницы на Jinja и JSON API с документацией в /docs</div>
+    </div>
+  </div>
+
+  <p class="flow-title">02&nbsp;&nbsp; ПРОГНОЗ → ОСТАТКИ → ПОТРЕБНОСТЬ</p>
+  <div class="flow2">
+    <div class="box"><h3>Базовый потенциал</h3><p>спрос по SKU</p></div>
+    {{ arrow_right() }}
+    <div class="box"><h3>Сезонность</h3><p>коэффициенты недель</p></div>
+    {{ arrow_right() }}
+    <div class="box green"><h3>Исходный прогноз</h3><p>спрос без лимита стока</p></div>
+    {{ arrow_right() }}
+    <div class="box"><h3>DIFF + доступность</h3><p>OVER / SHORT · приходы</p></div>
+    {{ arrow_right() }}
+    <div class="box result"><h3>Адаптированный</h3><p>прогноз продаж</p></div>
+
+    <div style="grid-column: 5">{{ arrow_down() }}</div>
+    <div style="grid-column: 9">{{ arrow_down() }}</div>
+
+    <div class="box plan" style="grid-column: 4 / 8"><h3>План закупок</h3><p>По исходному спросу и запасам</p></div>
+    <div class="box plan" style="grid-column: 8 / 10"><h3>Расчёт будущего стока</h3><p>Сценарий спроса и адаптации</p></div>
+  </div>
+
+  <p class="flow-title">03&nbsp;&nbsp; РАСЧЁТ ЗАКУПКИ</p>
+  <div class="flow">
+    <div class="box">
+      <h3>ВХОДНЫЕ ДАННЫЕ</h3>
+      <p>спрос · остатки · товары в пути</p>
+      <div class="impl">CheckStock отдаёт сюда <code>остатки</code> и <code>товары в пути</code> без двойного учёта</div>
+    </div>
+    {{ arrow_right() }}
+    <div class="box"><h3>ОГРАНИЧЕНИЯ</h3><p>lead time · MOQ · PCB · safety</p></div>
+    {{ arrow_right() }}
+    <div class="box"><h3>РАСЧЁТ</h3><p>дата заказа · количество</p></div>
+    {{ arrow_right() }}
+    <div class="box result"><h3>РЕЗУЛЬТАТ</h3><p>штуки · стоимость · м³ · приход</p></div>
+  </div>
+
+  <p class="sys-important"><b>Важно:</b> адаптированный прогноз ограничивает реализуемые продажи доступным стоком; исходный прогноз остаётся источником планового спроса для закупок.</p>
+</section>
+
+<div class="sys-cols" style="margin-top: 16px">
+  <section class="card principle">
+    <h3>В первой рабочей версии</h3>
+    <p class="quote">Все действующие магазины WB одновременно. Вторая очередь: Ozon, Яндекс Маркет, другие площадки</p>
+    <p>Как это заложено в CheckStock</p>
+    <ul>
+      <li>Товар принадлежит магазину: таблица <span class="mono">stores</span>, артикул уникален внутри магазина. Кабинеты не смешиваются, даже если у них совпадут артикулы.</li>
+      <li>У магазина есть поле площадки. Ozon и Яндекс Маркет добавятся как новые магазины и новые источники, без переделки учёта.</li>
+      <li>Источник данных — отдельный слой. Сейчас там тестовые данные, затем синхронизация с API WB с ключами повтора: повторная загрузка не задвоит операции.</li>
+    </ul>
+  </section>
+  <section class="card principle">
+    <h3>Ключевой принцип</h3>
+    <p class="quote">Исходный спрос сохраняется даже при отсутствии доступного товара: нельзя превращать нулевые продажи из-за шортажа в нулевую потребность</p>
+    <p>Как это заложено в CheckStock</p>
+    <ul>
+      <li>Если на выбранном ФФ не хватает товара, заказ FBS не отклоняется, а сохраняется со статусом «ждёт товара». Спрос виден на экране остатков.</li>
+      <li>Менеджер выбирает: взять с другого ФФ, разделить заказ или довезти товар перемещением.</li>
+      <li>Итоги по товару, складу и магазину сходятся: каждая единица числится в одном месте, и это проверяет сверка после каждой операции.</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}
