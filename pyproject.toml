@@ -17,6 +17,10 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "httpx>=0.28",
+    "hypothesis>=6.170.15",
+]
+load = [
+    "locust>=2.47.0",
 ]
 
 [tool.uv]
@@ -29,3 +33,17 @@ filterwarnings = [
     # Предупреждение Starlette о будущей замене httpx в TestClient, к нашему коду не относится
     "ignore:.*starlette.testclient.*",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, импорты, bugbear, pyupgrade и правила безопасности bandit
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101"]  # assert в тестах — это нормально
+
+[tool.ruff.lint.per-file-ignores]
+# Случайность здесь генерирует сценарии нагрузки и тестов, а не ключи и токены
+"tests/*" = ["S311"]
+"loadtest/*" = ["S311"]

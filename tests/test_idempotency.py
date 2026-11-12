@@ -6,7 +6,7 @@ from threading import Barrier
 import pytest
 
 from app.core import inventory as inv
-from app.core.errors import IdempotencyConflict
+from app.core.errors import IdempotencyConflict, InvalidOperation
 from app.db.models import DocStatus
 from tests.helpers import assert_reconciled, row, run, stock
 
@@ -39,7 +39,7 @@ def test_cancel_twice_and_ship_after_cancel(ids):
     order = run(inv.create_fbs_order, ids.sku["SKU-101"], ids.wh["Север"], 3).document
     run(inv.cancel_fbs, order.id)
     assert run(inv.cancel_fbs, order.id).replayed
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidOperation):
         run(inv.ship_fbs, order.id)
     assert stock(ids.sku["SKU-101"], ids.wh["Север"]) == (10, 0, 10)
 
@@ -93,4 +93,27 @@ def test_concurrent_double_submit_same_key(ids):
     results = _parallel(3, lambda _: run(inv.create_receipt, p, north, 2, key="double-click"))
     assert len({r.document.id for r in results}) == 1
     assert stock(p, north)[0] == 7
+    assert_reconciled()
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_concurrent_accept_and_delete_fbo_apply_only_one(ids, attempt):
+    """Регрессия: одновременные «Принять» и «Удалить» не должны провести движение дважды."""
+    p, south = ids.sku["SKU-103"], ids.wh["Юг"]
+    f = run(inv.create_fbo_shipment, p, south, 2).document
+    results = _parallel(2, lambda i: run(inv.accept_fbo if i == 0 else inv.delete_document, f.id))
+    applied = [r for r in results if not isinstance(r, Exception)]
+    assert len(applied) >= 1
+    r = row("SKU-103")
+    assert (r.transit_mp, r.mp + stock(p, south)[0]) == (0, 4)
+    assert_reconciled()
+
+
+@pytest.mark.parametrize("attempt", range(5))
+def test_concurrent_receive_and_delete_transfer_apply_only_one(ids, attempt):
+    p, north, south = ids.sku["SKU-101"], ids.wh["Север"], ids.wh["Юг"]
+    t = run(inv.create_transfer, p, north, south, 3).document
+    _parallel(2, lambda i: run(inv.receive_transfer if i == 0 else inv.delete_document, t.id))
+    assert stock(p, north)[0] + stock(p, south)[0] == 16
+    assert row("SKU-101").transit_ff == 0
     assert_reconciled()

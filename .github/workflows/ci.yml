@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Линтер, безопасность и тесты на PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: checkstock
+          POSTGRES_PASSWORD: checkstock
+          POSTGRES_DB: checkstock
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U checkstock"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://checkstock:checkstock@localhost:5432/checkstock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Зависимости
+        run: uv sync --frozen
+      - name: Ruff — стиль и правила безопасности
+        run: |
+          uvx ruff check app tests loadtest
+          uvx ruff format --check app tests loadtest
+      - name: Bandit — статический анализ безопасности
+        run: uvx bandit -q -r app
+      - name: pip-audit — известные уязвимости в библиотеках
+        run: uvx pip-audit -r requirements.txt
+      - name: Тесты (включая случайные сценарии и стресс параллельности)
+        run: uv run pytest
+      - name: Глубокий прогон случайных сценариев
+        run: uv run pytest tests/test_random_scenarios.py
+        env:
+          HYPOTHESIS_PROFILE: deep
+
+  docker:
+    name: Образ собирается и приложение отвечает
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose up
+        run: docker compose up -d --build --wait
+      - name: Приложение отвечает, сверка зелёная
+        run: |
+          for i in $(seq 1 30); do curl -sf localhost:8000/api/check && break; sleep 2; done
+          curl -sf localhost:8000/api/check | python3 -c "import json,sys; assert json.load(sys.stdin)['ok']"
+      - name: Тесты внутри контейнера
+        run: docker compose run --rm app pytest -x
+      - name: Логи при падении
+        if: failure()
+        run: docker compose logs

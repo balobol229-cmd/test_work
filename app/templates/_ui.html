@@ -40,7 +40,7 @@
 {%- endmacro %}
 
 {% macro delete_button(d, back="/operations", confirm_text="Удалить операцию? Товар вернётся туда, где был, а в истории останутся обе записи.") -%}
-<form method="post" action="/documents/{{ d.id }}/delete" class="inline" onsubmit="return confirm('{{ confirm_text }}')">
+<form method="post" action="/documents/{{ d.id }}/delete" class="inline" data-confirm="{{ confirm_text }}" onsubmit="return confirm(this.dataset.confirm)">
   <input type="hidden" name="back" value="{{ back }}">
   <button class="btn sm ghost danger" title="Отменить операцию обратной записью">{{ icon("trash") }}Удалить</button>
 </form>

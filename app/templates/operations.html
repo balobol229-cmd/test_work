@@ -20,6 +20,10 @@
 </label>
 {%- endmacro %}
 
+{% macro more(listing) -%}
+{% if listing.more > 0 %}<div class="empty">Показаны первые {{ listing.items | length }} из {{ listing.total | n }}. Выберите товар в фильтре, чтобы сузить список</div>{% endif %}
+{%- endmacro %}
+
 {% macro qty_input() -%}
 <label>Количество, шт.<input type="number" name="qty" min="1" step="1" value="1" required></label>
 {%- endmacro %}
@@ -73,8 +77,17 @@
 
   <div class="stack">
     <section class="card" id="fbs">
-      <div class="card-head"><h2>Заказы FBS</h2><span class="meta">{{ ops.fbs | length }} в работе</span></div>
-      {% for item in ops.fbs %}{% set d = item.document %}
+      <div class="card-head">
+        <h2>Заказы FBS</h2>
+        <form method="get" class="rename">
+          <select name="product_id" onchange="this.form.submit()" aria-label="Товар">
+            <option value="">Все товары</option>
+            {% for p in products %}<option value="{{ p.id }}" {{ "selected" if p.id == product_id }}>{{ p.sku }} · {{ p.name }}</option>{% endfor %}
+          </select>
+          <noscript><button class="btn sm">Показать</button></noscript>
+        </form>
+      </div>
+      {% for item in ops.fbs.items %}{% set d = item.document %}
       <div class="doc">
         <div>
           <div class="doc-title">{{ doc_name(d) }}</div>
@@ -122,11 +135,12 @@
       {% else %}
       <div class="empty">Открытых заказов нет</div>
       {% endfor %}
+      {{ more(ops.fbs) }}
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>Перемещения в пути</h2><span class="meta">{{ ops.transfers | length }}</span></div>
-      {% for d in ops.transfers %}
+      <div class="card-head"><h2>Перемещения в пути</h2><span class="meta">{{ ops.transfers.total | n }}</span></div>
+      {% for d in ops.transfers.items %}
       <div class="doc">
         <div>
           <div class="doc-title">{{ doc_name(d) }}</div>
@@ -140,11 +154,12 @@
       {% else %}
       <div class="empty">Ничего не едет</div>
       {% endfor %}
+      {{ more(ops.transfers) }}
     </section>
 
     <section class="card" id="fbo">
-      <div class="card-head"><h2>Поставки FBO в пути</h2><span class="meta">{{ ops.fbo | length }}</span></div>
-      {% for d in ops.fbo %}
+      <div class="card-head"><h2>Поставки FBO в пути</h2><span class="meta">{{ ops.fbo.total | n }}</span></div>
+      {% for d in ops.fbo.items %}
       <div class="doc">
         <div>
           <div class="doc-title">{{ doc_name(d) }}</div>
@@ -158,6 +173,7 @@
       {% else %}
       <div class="empty">Поставок в пути нет</div>
       {% endfor %}
+      {{ more(ops.fbo) }}
     </section>
 
     <section class="card">

@@ -45,5 +45,13 @@
       </tbody>
     </table>
   </div>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% set q = "&product_id=" ~ product_id if product_id else "" %}
+    {% if page_no > 1 %}<a class="btn sm" href="?page={{ page_no - 1 }}{{ q }}">Новее</a>{% endif %}
+    <span class="muted">{{ (page_no - 1) * per + 1 }}–{{ [page_no * per, total] | min }} из {{ total | n }}</span>
+    {% if page_no < pages %}<a class="btn sm" href="?page={{ page_no + 1 }}{{ q }}">Старее</a>{% endif %}
+  </div>
+  {% endif %}
 </section>
 {% endblock %}

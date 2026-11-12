@@ -34,7 +34,7 @@
       </div>
     </nav>
     <div class="side-foot">
-      <form method="post" action="/reset" onsubmit="return confirm('Сбросить все данные к тестовым из задания? Операции и история будут удалены.')">
+      <form method="post" action="/reset" data-confirm="Сбросить все данные к тестовым из задания? Операции и история будут удалены." onsubmit="return confirm(this.dataset.confirm)">
         <button class="btn sm ghost reset">{{ icon("reset") }}Сбросить к тестовым данным</button>
       </form>
       <div>Python · FastAPI · PostgreSQL</div>

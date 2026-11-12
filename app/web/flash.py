@@ -14,7 +14,9 @@ COOKIE = "flash"
 def redirect(url: str, kind: str, text: str, **extra) -> RedirectResponse:
     response = RedirectResponse(url, status_code=303)
     payload = json.dumps({"kind": kind, "text": text, **extra}, ensure_ascii=False)
-    response.set_cookie(COOKIE, base64.urlsafe_b64encode(payload.encode()).decode(), max_age=60, httponly=True, samesite="lax")
+    response.set_cookie(
+        COOKIE, base64.urlsafe_b64encode(payload.encode()).decode(), max_age=60, httponly=True, samesite="lax"
+    )
     return response
 
 

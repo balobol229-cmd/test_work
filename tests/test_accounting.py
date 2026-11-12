@@ -92,15 +92,15 @@ def test_fbo_leaves_warehouse_and_is_in_transit_until_accepted(ids):
 
 def test_full_day_scenario_reconciles_after_every_step(ids):
     p, north, south = ids.sku["SKU-101"], ids.wh["Север"], ids.wh["Юг"]
-    run(inv.create_receipt, p, north, 5)                          # Север 15, Юг 6
+    run(inv.create_receipt, p, north, 5)  # Север 15, Юг 6
     assert_reconciled()
-    transfer = run(inv.create_transfer, p, north, south, 4)       # Север 11, в пути 4
+    transfer = run(inv.create_transfer, p, north, south, 4)  # Север 11, в пути 4
     assert_reconciled()
-    run(inv.create_fbs_order, p, south, 6)                        # Юг: резерв 6
+    run(inv.create_fbs_order, p, south, 6)  # Юг: резерв 6
     assert_reconciled()
-    run(inv.receive_transfer, transfer.document.id)               # Юг 10
+    run(inv.receive_transfer, transfer.document.id)  # Юг 10
     assert_reconciled()
-    run(inv.create_fbo_shipment, p, north, 7)                     # Север 4, FBO в пути 7
+    run(inv.create_fbo_shipment, p, north, 7)  # Север 4, FBO в пути 7
     assert_reconciled()
 
     r = row("SKU-101")

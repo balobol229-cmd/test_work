@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -20,6 +22,21 @@ from app.db.models import (
     Store,
     Warehouse,
 )
+
+
+def snapshot(s: Session) -> None:
+    """Все следующие запросы этой транзакции читают один и тот же снимок базы.
+
+    Экраны и сверка делают несколько SELECT подряд. В обычном режиме (READ COMMITTED) между
+    ними успевают закоммититься чужие операции, и итоги складываются из разных моментов
+    времени: под нагрузкой сверка показывала ложное расхождение. REPEATABLE READ фиксирует
+    снимок на первом запросе. Вызывать до первого запроса в сессии.
+    """
+    if s.info.get("snapshot"):
+        return
+    s.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+    s.info["snapshot"] = True
+
 
 # ---------------------------------------------------------------------------
 # Экран остатков
@@ -40,11 +57,11 @@ class Cell:
 class Row:
     product: Product
     cells: dict[int, Cell]
-    transit_ff: int = 0   # в пути между ФФ
-    transit_mp: int = 0   # FBO, в пути на склад маркетплейса
-    mp: int = 0           # FBO, принято складом маркетплейса
-    customer: int = 0     # FBS, отправлено клиенту
-    waiting: int = 0      # FBS, ждёт товара: спрос, который сейчас нечем закрыть
+    transit_ff: int = 0  # в пути между ФФ
+    transit_mp: int = 0  # FBO, в пути на склад маркетплейса
+    mp: int = 0  # FBO, принято складом маркетплейса
+    customer: int = 0  # FBS, отправлено клиенту
+    waiting: int = 0  # FBS, ждёт товара: спрос, который сейчас нечем закрыть
 
     @property
     def on_hand(self) -> int:
@@ -66,8 +83,7 @@ class Row:
     def segments(self, warehouses: list[Warehouse]) -> list[tuple[str, str, int]]:
         """Полоса «где товар»: (css-класс, подпись, шт.) в порядке движения товара."""
         parts = [
-            (f"seg-free-{i % 3}", f"Доступно · {w.name}", self.cells[w.id].available)
-            for i, w in enumerate(warehouses)
+            (f"seg-free-{i % 3}", f"Доступно · {w.name}", self.cells[w.id].available) for i, w in enumerate(warehouses)
         ]
         parts += [
             ("seg-reserve", "Резерв FBS", self.reserved),
@@ -84,7 +100,8 @@ class Overview:
     store: Store | None
     warehouses: list[Warehouse]  # активные, затем удалённые с остатком
     rows: list[Row]
-    in_transit: list[Document]
+    in_transit: list[Document]  # первые IN_TRANSIT_SHOWN перемещений в пути
+    in_transit_total: int = 0
 
     def total(self, attr: str) -> int:
         return sum(getattr(r, attr) for r in self.rows)
@@ -92,8 +109,9 @@ class Overview:
 
 def _doc_sums(s: Session) -> dict[tuple, int]:
     rows = s.execute(
-        select(Document.product_id, Document.kind, Document.status, Document.from_warehouse_id, func.sum(Document.qty))
-        .group_by(Document.product_id, Document.kind, Document.status, Document.from_warehouse_id)
+        select(
+            Document.product_id, Document.kind, Document.status, Document.from_warehouse_id, func.sum(Document.qty)
+        ).group_by(Document.product_id, Document.kind, Document.status, Document.from_warehouse_id)
     ).all()
     sums: dict[tuple, int] = defaultdict(int)
     for product_id, kind, status, wh_id, qty in rows:
@@ -102,7 +120,11 @@ def _doc_sums(s: Session) -> dict[tuple, int]:
     return sums
 
 
+IN_TRANSIT_SHOWN = 20
+
+
 def stock_overview(s: Session) -> Overview:
+    snapshot(s)
     products = list(s.scalars(select(Product).options(joinedload(Product.store)).order_by(Product.sku)))
     stocks = s.scalars(select(Stock)).all()
     by_key = {(st.product_id, st.warehouse_id): st for st in stocks}
@@ -135,13 +157,19 @@ def stock_overview(s: Session) -> Overview:
     in_transit = list(
         s.scalars(
             select(Document)
-            .options(joinedload(Document.product), joinedload(Document.from_warehouse), joinedload(Document.to_warehouse))
+            .options(
+                joinedload(Document.product), joinedload(Document.from_warehouse), joinedload(Document.to_warehouse)
+            )
             .where(Document.kind == DocKind.TRANSFER, Document.status == DocStatus.IN_TRANSIT)
             .order_by(Document.id)
+            .limit(IN_TRANSIT_SHOWN)
         )
     )
+    in_transit_total = s.scalar(
+        select(func.count()).where(Document.kind == DocKind.TRANSFER, Document.status == DocStatus.IN_TRANSIT)
+    )
     store = products[0].store if products else s.scalar(select(Store).limit(1))
-    return Overview(store, warehouses, rows, in_transit)
+    return Overview(store, warehouses, rows, in_transit, in_transit_total)
 
 
 # ---------------------------------------------------------------------------
@@ -156,38 +184,69 @@ class OpenOrder:
 
 
 @dataclass
+class Listing:
+    """Первые N строк списка и сколько их всего: страница не растёт вместе с базой."""
+
+    items: list
+    total: int
+
+    @property
+    def more(self) -> int:
+        return self.total - len(self.items)
+
+
+@dataclass
 class Operations:
-    transfers: list[Document]
-    fbs: list[OpenOrder]
-    fbo: list[Document]
+    transfers: Listing
+    fbs: Listing  # из OpenOrder
+    fbo: Listing
     recent: list[Document]
 
 
-def operations(s: Session) -> Operations:
-    def docs(*where, limit: int | None = None, newest_first: bool = False):
+OPEN_SHOWN = 50
+
+
+def operations(s: Session, product_id: int | None = None, limit: int = OPEN_SHOWN) -> Operations:
+    snapshot(s)
+
+    def where(*conds):
+        return (*conds, Document.product_id == product_id) if product_id else conds
+
+    def listing(*conds) -> Listing:
         q = (
             select(Document)
-            .options(joinedload(Document.product), joinedload(Document.from_warehouse), joinedload(Document.to_warehouse))
-            .where(*where)
-            .order_by(Document.id.desc() if newest_first else Document.id)
+            .options(
+                joinedload(Document.product), joinedload(Document.from_warehouse), joinedload(Document.to_warehouse)
+            )
+            .where(*where(*conds))
+            .order_by(Document.id)
+            .limit(limit)
         )
-        if limit:
-            q = q.limit(limit)
-        return list(s.scalars(q))
+        return Listing(list(s.scalars(q)), s.scalar(select(func.count()).where(*where(*conds))))
 
-    transfers = docs(Document.kind == DocKind.TRANSFER, Document.status == DocStatus.IN_TRANSIT)
-    fbo = docs(Document.kind == DocKind.FBO, Document.status == DocStatus.IN_TRANSIT)
-    fbs = []
-    for d in docs(Document.kind == DocKind.FBS, Document.status.in_([DocStatus.WAITING, DocStatus.RESERVED])):
-        info = None
-        if d.status == DocStatus.WAITING:
-            stocks = {st.warehouse_id: st for st in s.scalars(select(Stock).where(Stock.product_id == d.product_id))}
-            info = shortage_info(s, d.from_warehouse, d.qty, stocks)
-        fbs.append(OpenOrder(d, info))
-    recent = docs(
-        Document.status.in_([DocStatus.DONE, DocStatus.RECEIVED, DocStatus.ACCEPTED, DocStatus.SHIPPED, DocStatus.CANCELLED]),
-        limit=12,
-        newest_first=True,
+    transfers = listing(Document.kind == DocKind.TRANSFER, Document.status == DocStatus.IN_TRANSIT)
+    fbo = listing(Document.kind == DocKind.FBO, Document.status == DocStatus.IN_TRANSIT)
+    # Заказы, которые ждут товара, — первыми: по ним нужно решение менеджера.
+    waiting = listing(Document.kind == DocKind.FBS, Document.status == DocStatus.WAITING)
+    reserved = listing(Document.kind == DocKind.FBS, Document.status == DocStatus.RESERVED)
+    orders = []
+    for d in waiting.items:
+        stocks = {st.warehouse_id: st for st in s.scalars(select(Stock).where(Stock.product_id == d.product_id))}
+        orders.append(OpenOrder(d, shortage_info(s, d.from_warehouse, d.qty, stocks)))
+    orders += [OpenOrder(d) for d in reserved.items[: max(0, limit - len(orders))]]
+    fbs = Listing(orders, waiting.total + reserved.total)
+
+    finished = [DocStatus.DONE, DocStatus.RECEIVED, DocStatus.ACCEPTED, DocStatus.SHIPPED, DocStatus.CANCELLED]
+    recent = list(
+        s.scalars(
+            select(Document)
+            .options(
+                joinedload(Document.product), joinedload(Document.from_warehouse), joinedload(Document.to_warehouse)
+            )
+            .where(*where(Document.status.in_(finished)))
+            .order_by(Document.id.desc())
+            .limit(12)
+        )
     )
     return Operations(transfers, fbs, fbo, recent)
 
@@ -228,7 +287,18 @@ def place_label(loc: str, wh: Warehouse | None) -> str:
     return PLACES[Loc(loc)]
 
 
-def history(s: Session, product_id: int | None = None, limit: int = 300) -> list[Movement]:
+HISTORY_PAGE = 100
+
+
+def history_count(s: Session, product_id: int | None = None) -> int:
+    q = select(func.count()).select_from(Movement)
+    if product_id:
+        q = q.where(Movement.product_id == product_id)
+    return s.scalar(q)
+
+
+def history(s: Session, product_id: int | None = None, limit: int = HISTORY_PAGE, offset: int = 0) -> list[Movement]:
+    """Страница истории, новые сверху. Индекс по product_id делает фильтр быстрым на любом объёме."""
     q = (
         select(Movement)
         .options(
@@ -239,6 +309,7 @@ def history(s: Session, product_id: int | None = None, limit: int = 300) -> list
         )
         .order_by(Movement.id.desc())
         .limit(limit)
+        .offset(offset)
     )
     if product_id:
         q = q.where(Movement.product_id == product_id)
@@ -272,6 +343,7 @@ class Reconciliation:
 
 def reconcile(s: Session) -> Reconciliation:
     """Сверяет три независимых источника: остатки `stock`, журнал движений и документы."""
+    snapshot(s)
     skus = dict(s.execute(select(Product.id, Product.sku)).all())
     wh_names = dict(s.execute(select(Warehouse.id, Warehouse.name)).all())
 
@@ -279,11 +351,18 @@ def reconcile(s: Session) -> Reconciliation:
     ledger: dict[tuple, int] = defaultdict(int)
     for p, fl, fw, tl, tw, qty in s.execute(
         select(
-            Movement.product_id, Movement.from_loc, Movement.from_warehouse_id,
-            Movement.to_loc, Movement.to_warehouse_id, func.sum(Movement.qty),
+            Movement.product_id,
+            Movement.from_loc,
+            Movement.from_warehouse_id,
+            Movement.to_loc,
+            Movement.to_warehouse_id,
+            func.sum(Movement.qty),
         ).group_by(
-            Movement.product_id, Movement.from_loc, Movement.from_warehouse_id,
-            Movement.to_loc, Movement.to_warehouse_id,
+            Movement.product_id,
+            Movement.from_loc,
+            Movement.from_warehouse_id,
+            Movement.to_loc,
+            Movement.to_warehouse_id,
         )
     ):
         ledger[(p, fl, fw)] -= qty
@@ -339,3 +418,38 @@ def reconcile(s: Session) -> Reconciliation:
             c3.problems.append(f"{sku}: принято {received}, числится {located}")
 
     return Reconciliation([c1, c2, c3], units)
+
+
+# ---------------------------------------------------------------------------
+# Штамп сверки в шапке страниц
+# ---------------------------------------------------------------------------
+#
+# Полная сверка — агрегат по всему журналу. На 200 тыс. движений это ~50 мс, и под нагрузкой
+# пересчитывать её на КАЖДОЙ странице означает десятки полных проходов по журналу в секунду.
+# Поэтому штамп берёт результат не старше STAMP_TTL секунд, и пересчитывает его один поток
+# (остальные ждут и берут готовый). Полная свежая сверка — на /check и в /api/check.
+
+STAMP_TTL = 3.0
+_stamp: tuple[float, Reconciliation] | None = None
+_stamp_lock = threading.Lock()
+
+
+def reconcile_for_stamp(session_factory) -> Reconciliation:
+    global _stamp
+    cached = _stamp
+    if cached and time.monotonic() - cached[0] < STAMP_TTL:
+        return cached[1]
+    with _stamp_lock:
+        cached = _stamp
+        if cached and time.monotonic() - cached[0] < STAMP_TTL:
+            return cached[1]
+        with session_factory() as s:
+            rec = reconcile(s)
+        _stamp = (time.monotonic(), rec)
+        return rec
+
+
+def invalidate_stamp() -> None:
+    """После действия из интерфейса штамп пересчитывается сразу: человек видит свежие цифры."""
+    global _stamp
+    _stamp = None

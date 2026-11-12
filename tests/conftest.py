@@ -19,6 +19,7 @@ from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
+from app.core import views  # noqa: E402
 from app.db.models import Product, Warehouse  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.sources.seed import reset, seed  # noqa: E402
@@ -50,6 +51,7 @@ def data(schema):
     with SessionLocal.begin() as s:
         reset(s)
         seed(s)
+    views.invalidate_stamp()
 
 
 class Ids:

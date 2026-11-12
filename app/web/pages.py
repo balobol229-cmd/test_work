@@ -38,13 +38,11 @@ REPLAYED = "Повтор: эта операция уже проведена, о�
 
 
 def _render(request: Request, name: str, page: str, **ctx) -> HTMLResponse:
-    with SessionLocal() as s:
-        rec = views.reconcile(s)
-        if "store" not in ctx:
+    rec = ctx.pop("rec", None) or views.reconcile_for_stamp(SessionLocal)
+    if "store" not in ctx:
+        with SessionLocal() as s:
             ctx["store"] = s.scalar(select(Store).order_by(Store.id).limit(1))
-    response = templates.TemplateResponse(
-        request, name, {"page": page, "rec": rec, "flash": flash.pop(request), **ctx}
-    )
+    response = templates.TemplateResponse(request, name, {"page": page, "rec": rec, "flash": flash.pop(request), **ctx})
     response.delete_cookie(flash.COOKIE)
     return response
 
@@ -109,25 +107,26 @@ def stock_page(request: Request):
 
 @router.get("/check", response_class=HTMLResponse)
 def check_page(request: Request):
-    return _render(request, "check.html", "check")
+    with SessionLocal() as s:
+        rec = views.reconcile(s)  # здесь всегда полная свежая сверка, без кэша
+    return _render(request, "check.html", "check", rec=rec)
 
 
 # --- Операции ---------------------------------------------------------------
 
 
 @router.get("/operations", response_class=HTMLResponse)
-def operations_page(request: Request):
+def operations_page(request: Request, product_id: str = ""):
+    pid = _int(product_id)
     with SessionLocal() as s:
-        ops = views.operations(s)
+        ops = views.operations(s, pid if pid and 0 < pid <= 2_147_483_647 else None)
         refs = _refs(s)
-        available = {
-            (st.product_id, st.warehouse_id): st.available for st in s.scalars(select(Stock))
-        }
-    return _render(request, "operations.html", "operations", ops=ops, available=available, **refs)
+        available = {(st.product_id, st.warehouse_id): st.available for st in s.scalars(select(Stock))}
+    return _render(request, "operations.html", "operations", ops=ops, available=available, product_id=pid, **refs)
 
 
 @router.post("/operations/receipt")
-def post_receipt(product_id: str = Form(), warehouse_id: str = Form(), qty: str = Form(), key: str = Form()):
+def post_receipt(product_id: str = Form(""), warehouse_id: str = Form(""), qty: str = Form(""), key: str = Form("")):
     def done(s, r):
         return "ok", f"Приход проведён: {_what(r.document)} на «{r.document.to_warehouse.name}»"
 
@@ -136,7 +135,7 @@ def post_receipt(product_id: str = Form(), warehouse_id: str = Form(), qty: str 
 
 @router.post("/operations/transfer")
 def post_transfer(
-    product_id: str = Form(), from_id: str = Form(), to_id: str = Form(), qty: str = Form(), key: str = Form()
+    product_id: str = Form(""), from_id: str = Form(""), to_id: str = Form(""), qty: str = Form(""), key: str = Form("")
 ):
     def done(s, r):
         d = r.document
@@ -171,12 +170,21 @@ def _fbs_done(s: Session, r: inv.Result) -> tuple[str, str]:
 
 @router.post("/operations/fbs")
 def post_fbs(
-    product_id: str = Form(), warehouse_id: str = Form(), qty: str = Form(), key: str = Form(),
+    product_id: str = Form(""),
+    warehouse_id: str = Form(""),
+    qty: str = Form(""),
+    key: str = Form(""),
     order_ref: str = Form(""),
 ):
     return _act(
-        "/operations", inv.create_fbs_order, _int(product_id), _int(warehouse_id), _int(qty),
-        order_ref=order_ref, key=key, done=_fbs_done,
+        "/operations",
+        inv.create_fbs_order,
+        _int(product_id),
+        _int(warehouse_id),
+        _int(qty),
+        order_ref=order_ref,
+        key=key,
+        done=_fbs_done,
     )
 
 
@@ -229,15 +237,24 @@ def post_reset():
 
 
 @router.post("/operations/fbo")
-def post_fbo(product_id: str = Form(), warehouse_id: str = Form(), qty: str = Form(), key: str = Form()):
+def post_fbo(product_id: str = Form(""), warehouse_id: str = Form(""), qty: str = Form(""), key: str = Form("")):
     def done(s, r):
-        return "ok", f"Поставка FBO отгружена: {_what(r.document)} с «{r.document.from_warehouse.name}», в пути на склад WB"
+        return (
+            "ok",
+            f"Поставка FBO отгружена: {_what(r.document)} с «{r.document.from_warehouse.name}», в пути на склад WB",
+        )
 
     # Для FBO нехватка — отказ: поставку собирают с одного склада. Варианты придут
     # в сообщении кнопками; у каждой кнопки свой новый ключ, это уже другая операция.
     pid, wid, q = _int(product_id), _int(warehouse_id), _int(qty)
     return _act(
-        "/operations", inv.create_fbo_shipment, pid, wid, q, key=key, done=done,
+        "/operations",
+        inv.create_fbo_shipment,
+        pid,
+        wid,
+        q,
+        key=key,
+        done=done,
         retry={"product_id": pid, "qty": q},
     )
 
@@ -282,7 +299,7 @@ def post_warehouse(name: str = Form("")):
 def post_rename(warehouse_id: int, name: str = Form("")):
     try:
         with SessionLocal.begin() as s:
-            old = s.get(Warehouse, warehouse_id)
+            old = s.get(Warehouse, inv.check_id(warehouse_id, "Склад"))
             old_name = old.name if old else ""
             wh = inv.rename_warehouse(s, warehouse_id, name)
             text = f"«{old_name}» переименован в «{wh.name}». История осталась при складе"
@@ -304,7 +321,8 @@ def post_delete(warehouse_id: int):
     if res.left_on_hand:
         left = ", ".join(f"{sku} · {q} шт." for sku, q in res.left_on_hand)
         return flash.redirect(
-            "/warehouses", "warn",
+            "/warehouses",
+            "warn",
             f"Склад «{name}» удалён. На нём числится {left}: остаток виден на экране остатков, "
             "вывезти его можно перемещением",
         )
@@ -315,12 +333,28 @@ def post_delete(warehouse_id: int):
 
 
 @router.get("/history", response_class=HTMLResponse)
-def history_page(request: Request, product_id: str = ""):
+def history_page(request: Request, product_id: str = "", page: str = "1"):
     pid = _int(product_id)
+    pid = pid if pid and 0 < pid <= 2_147_483_647 else None
+    per = views.HISTORY_PAGE
     with SessionLocal() as s:
-        moves = views.history(s, pid)
+        total = views.history_count(s, pid)
+        pages = max(1, -(-total // per))
+        current = min(max(_int(page) or 1, 1), pages)
+        moves = views.history(s, pid, offset=(current - 1) * per)
         refs = _refs(s)
-    return _render(request, "history.html", "history", moves=moves, product_id=pid, **refs)
+    return _render(
+        request,
+        "history.html",
+        "history",
+        moves=moves,
+        product_id=pid,
+        total=total,
+        page_no=current,
+        pages=pages,
+        per=per,
+        **refs,
+    )
 
 
 @router.get("/system", response_class=HTMLResponse)

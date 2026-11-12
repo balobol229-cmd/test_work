@@ -137,7 +137,7 @@
 <section class="card">
   <div class="card-head">
     <h2>В пути между ФФ</h2>
-    <span class="meta">числится в пути до приёмки на складе-получателе</span>
+    <span class="meta">{{ o.in_transit_total | n }} · числится в пути до приёмки на складе-получателе</span>
   </div>
   {% for d in o.in_transit %}
   <div class="doc">
@@ -152,5 +152,8 @@
   {% else %}
   <div class="empty">Сейчас ничего не едет между складами</div>
   {% endfor %}
+  {% if o.in_transit_total > o.in_transit | length %}
+  <div class="empty">Показаны первые {{ o.in_transit | length }} из {{ o.in_transit_total | n }}. <a href="/operations">Все перемещения в пути</a></div>
+  {% endif %}
 </section>
 {% endblock %}

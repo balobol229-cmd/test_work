@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -25,7 +26,11 @@ def tx() -> Iterator[Session]:
         yield s
 
 
-Qty = Field(gt=0, description="Количество, шт.")
+DB = Annotated[Session, Depends(tx)]  # одна транзакция на запрос: ошибка — откат, успех — коммит
+IdemKey = Annotated[str | None, Header(description="Ключ повтора: тот же ключ — тот же документ")]
+
+
+Qty = Field(gt=0, le=inv.MAX_QTY, strict=True, description="Количество, шт.")
 
 
 class WarehouseIn(BaseModel):
@@ -95,7 +100,7 @@ def _result(res: inv.Result, response: Response, *, created: bool = False) -> di
 
 
 @router.get("/stock", summary="Остатки по товарам и складам")
-def get_stock(s: Session = Depends(tx)):
+def get_stock(s: DB):
     o = views.stock_overview(s)
     return {
         "store": {"name": o.store.name, "marketplace": o.store.marketplace} if o.store else None,
@@ -122,7 +127,7 @@ def get_stock(s: Session = Depends(tx)):
 
 
 @router.get("/check", summary="Сверка: остатки, журнал и документы сходятся")
-def get_check(s: Session = Depends(tx)):
+def get_check(s: DB):
     rec = views.reconcile(s)
     return {
         "ok": rec.ok,
@@ -132,7 +137,12 @@ def get_check(s: Session = Depends(tx)):
 
 
 @router.get("/history", summary="История движений")
-def get_history(product_id: int | None = None, s: Session = Depends(tx)):
+def get_history(
+    s: DB,
+    product_id: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = views.HISTORY_PAGE,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
     return [
         {
             "id": m.id,
@@ -144,7 +154,7 @@ def get_history(product_id: int | None = None, s: Session = Depends(tx)):
             "to": views.place_label(m.to_loc, m.to_warehouse),
             "document_id": m.document_id,
         }
-        for m in views.history(s, product_id)
+        for m in views.history(s, product_id, limit=limit, offset=offset)
     ]
 
 
@@ -152,17 +162,17 @@ def get_history(product_id: int | None = None, s: Session = Depends(tx)):
 
 
 @router.post("/warehouses", status_code=201, summary="Добавить ФФ")
-def post_warehouse(body: WarehouseIn, s: Session = Depends(tx)):
+def post_warehouse(body: WarehouseIn, s: DB):
     return _wh(inv.create_warehouse(s, body.name))
 
 
 @router.patch("/warehouses/{warehouse_id}", summary="Переименовать ФФ")
-def patch_warehouse(warehouse_id: int, body: WarehouseIn, s: Session = Depends(tx)):
+def patch_warehouse(warehouse_id: int, body: WarehouseIn, s: DB):
     return _wh(inv.rename_warehouse(s, warehouse_id, body.name))
 
 
 @router.delete("/warehouses/{warehouse_id}", summary="Удалить ФФ (остатки и история сохраняются)")
-def delete_warehouse(warehouse_id: int, s: Session = Depends(tx)):
+def delete_warehouse(warehouse_id: int, s: DB):
     res = inv.archive_warehouse(s, warehouse_id)
     return {
         "warehouse": _wh(res.warehouse),
@@ -175,15 +185,13 @@ def delete_warehouse(warehouse_id: int, s: Session = Depends(tx)):
 
 
 @router.post("/receipts", summary="Приход на ФФ")
-def post_receipt(body: ReceiptIn, response: Response, s: Session = Depends(tx),
-                 idempotency_key: str | None = Header(None)):
+def post_receipt(body: ReceiptIn, response: Response, s: DB, idempotency_key: IdemKey = None):
     res = inv.create_receipt(s, body.product_id, body.warehouse_id, body.qty, key=idempotency_key)
     return _result(res, response, created=True)
 
 
 @router.post("/transfers", summary="Отправить перемещение между ФФ")
-def post_transfer(body: TransferIn, response: Response, s: Session = Depends(tx),
-                  idempotency_key: str | None = Header(None)):
+def post_transfer(body: TransferIn, response: Response, s: DB, idempotency_key: IdemKey = None):
     res = inv.create_transfer(
         s, body.product_id, body.from_warehouse_id, body.to_warehouse_id, body.qty, key=idempotency_key
     )
@@ -191,13 +199,12 @@ def post_transfer(body: TransferIn, response: Response, s: Session = Depends(tx)
 
 
 @router.post("/transfers/{doc_id}/receive", summary="Принять перемещение")
-def post_transfer_receive(doc_id: int, response: Response, s: Session = Depends(tx)):
+def post_transfer_receive(doc_id: int, response: Response, s: DB):
     return _result(inv.receive_transfer(s, doc_id), response)
 
 
 @router.post("/fbs", summary="Заказ FBS: резерв на ФФ")
-def post_fbs(body: FbsIn, response: Response, s: Session = Depends(tx),
-             idempotency_key: str | None = Header(None)):
+def post_fbs(body: FbsIn, response: Response, s: DB, idempotency_key: IdemKey = None):
     res = inv.create_fbs_order(
         s, body.product_id, body.warehouse_id, body.qty, order_ref=body.order_ref, key=idempotency_key
     )
@@ -205,38 +212,36 @@ def post_fbs(body: FbsIn, response: Response, s: Session = Depends(tx),
 
 
 @router.post("/fbs/{doc_id}/reserve", summary="Повторить резерв, можно с другого ФФ")
-def post_fbs_reserve(doc_id: int, response: Response, body: ReserveIn | None = None,
-                     s: Session = Depends(tx)):
+def post_fbs_reserve(doc_id: int, response: Response, s: DB, body: ReserveIn | None = None):
     return _result(inv.reserve_fbs(s, doc_id, warehouse_id=body.warehouse_id if body else None), response)
 
 
 @router.post("/fbs/{doc_id}/split", summary="Разделить заказ между ФФ")
-def post_fbs_split(doc_id: int, response: Response, s: Session = Depends(tx)):
+def post_fbs_split(doc_id: int, response: Response, s: DB):
     return _result(inv.split_fbs(s, doc_id), response)
 
 
 @router.post("/fbs/{doc_id}/ship", summary="Отправить заказ клиенту")
-def post_fbs_ship(doc_id: int, response: Response, s: Session = Depends(tx)):
+def post_fbs_ship(doc_id: int, response: Response, s: DB):
     return _result(inv.ship_fbs(s, doc_id), response)
 
 
 @router.post("/fbs/{doc_id}/cancel", summary="Отменить заказ, снять резерв")
-def post_fbs_cancel(doc_id: int, response: Response, s: Session = Depends(tx)):
+def post_fbs_cancel(doc_id: int, response: Response, s: DB):
     return _result(inv.cancel_fbs(s, doc_id), response)
 
 
 @router.post("/documents/{doc_id}/cancel", summary="Удалить операцию: отмена обратным движением, история сохраняется")
-def post_document_cancel(doc_id: int, response: Response, s: Session = Depends(tx)):
+def post_document_cancel(doc_id: int, response: Response, s: DB):
     return _result(inv.delete_document(s, doc_id), response)
 
 
 @router.post("/fbo", summary="Отгрузить FBO на склад маркетплейса")
-def post_fbo(body: FboIn, response: Response, s: Session = Depends(tx),
-             idempotency_key: str | None = Header(None)):
+def post_fbo(body: FboIn, response: Response, s: DB, idempotency_key: IdemKey = None):
     res = inv.create_fbo_shipment(s, body.product_id, body.warehouse_id, body.qty, key=idempotency_key)
     return _result(res, response, created=True)
 
 
 @router.post("/fbo/{doc_id}/accept", summary="Поставка принята складом маркетплейса")
-def post_fbo_accept(doc_id: int, response: Response, s: Session = Depends(tx)):
+def post_fbo_accept(doc_id: int, response: Response, s: DB):
     return _result(inv.accept_fbo(s, doc_id), response)

@@ -35,7 +35,13 @@ from app.core.errors import (
 )
 from app.db.models import DocKind, DocStatus, Document, Loc, Movement, Product, Stock, Warehouse
 
-Place = tuple[Loc, int | None]  # место и склад, если место на складе
+Place = tuple[Loc, int | None]
+
+# Каждая блокировка (FOR UPDATE / FOR SHARE) перечитывает строку из базы. Без этого SQLAlchemy
+# вернул бы объект, уже загруженный раньше в этой транзакции, — то есть состояние ДО того, как
+# мы дождались блокировки. Именно так стресс-тест поймал двойное проведение при одновременных
+# «Принять» и «Удалить».
+_FRESH = {"populate_existing": True}  # место и склад, если место на складе
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +67,7 @@ class ShortageInfo:
     available: int
     total_available: int
     options: list[Option]
+    plan: list[tuple[int, str, int]] = field(default_factory=list)  # как собрать заказ, если товара хватает
 
     @property
     def message(self) -> str:
@@ -106,13 +113,39 @@ class Result:
 # ---------------------------------------------------------------------------
 
 
+# Колонки количества и id в PostgreSQL — INTEGER (до 2 147 483 647). Значения проверяем
+# до базы: иначе огромное число из формы дошло бы до PostgreSQL и вернуло ошибку 500.
+MAX_QTY = 1_000_000
+_MAX_ID = 2_147_483_647
+MAX_TEXT = {"order_ref": 64, "key": 100}
+
+
 def _check_qty(qty: int) -> None:
-    if not isinstance(qty, int) or qty <= 0:
+    if not isinstance(qty, int) or isinstance(qty, bool) or qty <= 0:
         raise ValidationFailed("Количество должно быть целым числом больше нуля")
+    if qty > MAX_QTY:
+        raise ValidationFailed(
+            f"Слишком большое количество: в одной операции не больше {MAX_QTY:,} шт.".replace(",", " ")
+        )
+
+
+def _check_id(value: int | None, what: str) -> int:
+    """Неверный или несуществующий id — это «не найдено», а не ошибка базы."""
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 < value <= _MAX_ID:
+        raise NotFound(f"{what} не найден")
+    return value
+
+
+check_id = _check_id
+
+
+def _check_text(value: str | None, field: str, label: str) -> None:
+    if value is not None and len(value) > MAX_TEXT[field]:
+        raise ValidationFailed(f"{label} длиннее {MAX_TEXT[field]} символов")
 
 
 def _product(s: Session, product_id: int) -> Product:
-    product = s.get(Product, product_id)
+    product = s.get(Product, _check_id(product_id, "Товар"))
     if product is None:
         raise NotFound("Товар не найден")
     return product
@@ -120,15 +153,14 @@ def _product(s: Session, product_id: int) -> Product:
 
 def _warehouse(s: Session, warehouse_id: int, *, must_be_active: bool = True) -> Warehouse:
     """Читает склад с блокировкой FOR SHARE: пока операция идёт, склад нельзя удалить."""
+    _check_id(warehouse_id, "Склад")
     wh = s.scalar(
-        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update(read=True)
+        select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update(read=True).execution_options(**_FRESH)
     )
     if wh is None:
         raise NotFound("Склад не найден")
     if must_be_active and not wh.is_active:
-        raise InvalidOperation(
-            f"Склад «{wh.name}» удалён. С него можно только вывезти остаток перемещением"
-        )
+        raise InvalidOperation(f"Склад «{wh.name}» удалён. С него можно только вывезти остаток перемещением")
     return wh
 
 
@@ -144,13 +176,18 @@ def _lock_stock(s: Session, product_id: int) -> dict[int, Stock]:
         .where(Stock.product_id == product_id)
         .order_by(Stock.warehouse_id)
         .with_for_update()
+        .execution_options(**_FRESH)
     ).all()
     return {row.warehouse_id: row for row in rows}
 
 
 def _lock_document(s: Session, doc_id: int, kind: DocKind) -> Document:
+    _check_id(doc_id, "Документ")
     doc = s.scalar(
-        select(Document).where(Document.id == doc_id, Document.kind == kind).with_for_update()
+        select(Document)
+        .where(Document.id == doc_id, Document.kind == kind)
+        .with_for_update()
+        .execution_options(**_FRESH)
     )
     if doc is None:
         raise NotFound("Документ не найден")
@@ -161,6 +198,7 @@ def _by_key(s: Session, key: str | None, kind: DocKind, **params) -> Document | 
     """Находит документ, уже созданный с этим ключом повтора."""
     if not key:
         return None
+    _check_text(key, "key", "Ключ повтора")
     # Два одновременных запроса с одним ключом встанут в очередь здесь.
     s.execute(select(func.pg_advisory_xact_lock(func.hashtext(key))))
     doc = s.scalar(select(Document).where(Document.idempotency_key == key))
@@ -202,14 +240,10 @@ def _move(
 
 
 def _active_warehouses(s: Session) -> list[Warehouse]:
-    return list(
-        s.scalars(select(Warehouse).where(Warehouse.archived_at.is_(None)).order_by(Warehouse.id))
-    )
+    return list(s.scalars(select(Warehouse).where(Warehouse.archived_at.is_(None)).order_by(Warehouse.id)))
 
 
-def shortage_info(
-    s: Session, wh: Warehouse, qty: int, stocks: dict[int, Stock]
-) -> ShortageInfo:
+def shortage_info(s: Session, wh: Warehouse, qty: int, stocks: dict[int, Stock]) -> ShortageInfo:
     """Считает, чего не хватает на `wh`, и какие есть варианты на других активных ФФ."""
     actives = _active_warehouses(s)
     avail = {w.id: (stocks[w.id].available if w.id in stocks else 0) for w in actives}
@@ -218,11 +252,10 @@ def shortage_info(
     others = sorted((w for w in actives if w.id != wh.id), key=lambda w: -avail[w.id])
 
     options: list[Option] = []
+    plan: list[tuple[int, str, int]] = []
     for w in others:
         if avail[w.id] >= qty:
-            options.append(
-                Option("switch", f"Взять все {qty} шт. с «{w.name}»", warehouse_id=w.id)
-            )
+            options.append(Option("switch", f"Взять все {qty} шт. с «{w.name}»", warehouse_id=w.id))
     if total >= qty:
         plan = _split_plan(wh, here, others, avail, qty)
         if len(plan) > 1:
@@ -241,7 +274,7 @@ def shortage_info(
             parts = ", ".join(f"{q} шт. с «{n}»" for _, n, q in moves)
             options.append(Option("transfer", f"Переместить на «{wh.name}»: {parts}", plan=moves))
 
-    return ShortageInfo(wh.id, wh.name, qty, here, total, options)
+    return ShortageInfo(wh.id, wh.name, qty, here, total, options, plan)
 
 
 def _split_plan(
@@ -290,9 +323,7 @@ def _clean_name(name: str) -> str:
 
 
 def _ensure_unique_name(s: Session, name: str, exclude_id: int | None = None) -> None:
-    query = select(Warehouse.id).where(
-        Warehouse.archived_at.is_(None), func.lower(Warehouse.name) == name.lower()
-    )
+    query = select(Warehouse.id).where(Warehouse.archived_at.is_(None), func.lower(Warehouse.name) == name.lower())
     if exclude_id is not None:
         query = query.where(Warehouse.id != exclude_id)
     if s.scalar(query) is not None:
@@ -330,16 +361,15 @@ def archive_warehouse(s: Session, warehouse_id: int) -> ArchiveResult:
     Нельзя удалить склад, на который едет перемещение, на котором есть резерв FBS или
     заказ, ожидающий товара: эти операции некуда было бы завершить.
     """
-    wh = s.scalar(select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update())
+    _check_id(warehouse_id, "Склад")
+    wh = s.scalar(select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update().execution_options(**_FRESH))
     if wh is None:
         raise NotFound("Склад не найден")
     if not wh.is_active:
         return ArchiveResult(wh, replayed=True)
 
     blockers: list[str] = []
-    reserved = s.scalar(
-        select(func.coalesce(func.sum(Stock.reserved), 0)).where(Stock.warehouse_id == wh.id)
-    )
+    reserved = s.scalar(select(func.coalesce(func.sum(Stock.reserved), 0)).where(Stock.warehouse_id == wh.id))
     if reserved:
         blockers.append(f"в резерве FBS {reserved} шт. — отправьте или отмените заказы")
     incoming = s.scalar(
@@ -379,9 +409,7 @@ def archive_warehouse(s: Session, warehouse_id: int) -> ArchiveResult:
 # ---------------------------------------------------------------------------
 
 
-def create_receipt(
-    s: Session, product_id: int, warehouse_id: int, qty: int, *, key: str | None = None
-) -> Result:
+def create_receipt(s: Session, product_id: int, warehouse_id: int, qty: int, *, key: str | None = None) -> Result:
     _check_qty(qty)
     if doc := _by_key(s, key, DocKind.RECEIPT, product_id=product_id, to_warehouse_id=warehouse_id, qty=qty):
         return Result(doc, replayed=True)
@@ -444,8 +472,13 @@ def create_transfer(
     if from_warehouse_id == to_warehouse_id:
         raise ValidationFailed("Склад отправки и склад приёмки совпадают")
     if doc := _by_key(
-        s, key, DocKind.TRANSFER, product_id=product_id,
-        from_warehouse_id=from_warehouse_id, to_warehouse_id=to_warehouse_id, qty=qty,
+        s,
+        key,
+        DocKind.TRANSFER,
+        product_id=product_id,
+        from_warehouse_id=from_warehouse_id,
+        to_warehouse_id=to_warehouse_id,
+        qty=qty,
     ):
         return Result(doc, replayed=True)
     _product(s, product_id)
@@ -519,6 +552,7 @@ def create_fbs_order(
     """
     _check_qty(qty)
     order_ref = (order_ref or "").strip() or None
+    _check_text(order_ref, "order_ref", "Номер заказа")
     # Склад и количество заказа могут измениться при переносе или разделении,
     # поэтому повтор узнаём по товару.
     if doc := _by_key(s, key, DocKind.FBS, product_id=product_id):
@@ -582,15 +616,16 @@ def split_fbs(s: Session, doc_id: int) -> Result:
     wh = _warehouse(s, doc.from_warehouse_id)
     stocks = _lock_stock(s, doc.product_id)
     info = shortage_info(s, wh, doc.qty, stocks)
-    split = next((o for o in info.options if o.kind == "split"), None)
     if info.available >= doc.qty:
         _reserve(s, doc, stocks)
         s.flush()
         return Result(doc)
-    if split is None:
+    if not info.plan:
         raise Shortage(info.message, shortage=info)
 
-    (first_wh, _, first_qty), *rest = split.plan
+    # План может состоять из одной части: на выбранном ФФ ноль, а другой склад закрывает
+    # заказ целиком. Тогда «разделить» = собрать заказ там, где товар есть.
+    (first_wh, _, first_qty), *rest = info.plan
     doc.qty = first_qty
     doc.from_warehouse_id = first_wh
     _reserve(s, doc, stocks)
@@ -647,9 +682,7 @@ def cancel_fbs(s: Session, doc_id: int) -> Result:
 # ---------------------------------------------------------------------------
 
 
-def create_fbo_shipment(
-    s: Session, product_id: int, warehouse_id: int, qty: int, *, key: str | None = None
-) -> Result:
+def create_fbo_shipment(s: Session, product_id: int, warehouse_id: int, qty: int, *, key: str | None = None) -> Result:
     _check_qty(qty)
     if doc := _by_key(s, key, DocKind.FBO, product_id=product_id, from_warehouse_id=warehouse_id, qty=qty):
         return Result(doc, replayed=True)
@@ -725,7 +758,7 @@ def can_delete(doc: Document) -> bool:
 
 def delete_document(s: Session, doc_id: int) -> Result:
     """«Удалить» в интерфейсе — это отмена операции обратным движением, а не стирание строк."""
-    doc = s.get(Document, doc_id)
+    doc = s.get(Document, _check_id(doc_id, "Документ"))
     if doc is None:
         raise NotFound("Документ не найден")
     return _CANCEL[DocKind(doc.kind)](s, doc_id)

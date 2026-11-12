@@ -26,7 +26,8 @@
           </td>
           <td class="n">
             <form method="post" action="/warehouses/{{ w.id }}/delete" class="inline"
-                  onsubmit="return confirm('Удалить склад «{{ w.name }}»? Остаток и история сохранятся.')">
+                  data-confirm="Удалить склад «{{ w.name }}»? Остаток и история сохранятся."
+                  onsubmit="return confirm(this.dataset.confirm)">
               <button class="btn sm ghost danger">Удалить</button>
             </form>
           </td>

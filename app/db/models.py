@@ -34,33 +34,33 @@ class Base(DeclarativeBase):
 
 
 class DocKind(StrEnum):
-    RECEIPT = "receipt"    # приход от поставщика на ФФ
+    RECEIPT = "receipt"  # приход от поставщика на ФФ
     TRANSFER = "transfer"  # перемещение между ФФ
-    FBS = "fbs"            # заказ FBS: резерв на ФФ, затем отправка клиенту
-    FBO = "fbo"            # поставка FBO на склад маркетплейса
+    FBS = "fbs"  # заказ FBS: резерв на ФФ, затем отправка клиенту
+    FBO = "fbo"  # поставка FBO на склад маркетплейса
 
 
 class DocStatus(StrEnum):
-    DONE = "done"              # приход проведён
+    DONE = "done"  # приход проведён
     IN_TRANSIT = "in_transit"  # перемещение или FBO в пути
-    RECEIVED = "received"      # перемещение принято на ФФ-получателе
-    ACCEPTED = "accepted"      # FBO принята складом маркетплейса
-    WAITING = "waiting"        # FBS: на выбранном ФФ не хватило, спрос сохранён
-    RESERVED = "reserved"      # FBS: товар заблокирован на ФФ
-    SHIPPED = "shipped"        # FBS: отправлен, едет к клиенту
-    CANCELLED = "cancelled"    # FBS: отменён
+    RECEIVED = "received"  # перемещение принято на ФФ-получателе
+    ACCEPTED = "accepted"  # FBO принята складом маркетплейса
+    WAITING = "waiting"  # FBS: на выбранном ФФ не хватило, спрос сохранён
+    RESERVED = "reserved"  # FBS: товар заблокирован на ФФ
+    SHIPPED = "shipped"  # FBS: отправлен, едет к клиенту
+    CANCELLED = "cancelled"  # FBS: отменён
 
 
 class Loc(StrEnum):
     """Места, между которыми двигаются единицы товара."""
 
-    SUPPLIER = "supplier"      # вне системы: откуда пришёл приход
-    FF = "ff"                  # на складе ФФ, свободно
+    SUPPLIER = "supplier"  # вне системы: откуда пришёл приход
+    FF = "ff"  # на складе ФФ, свободно
     FF_RESERVE = "ff_reserve"  # на складе ФФ, в резерве FBS
     TRANSIT_FF = "transit_ff"  # в пути между ФФ
     TRANSIT_MP = "transit_mp"  # FBO: в пути на склад маркетплейса
-    MP = "mp"                  # FBO: принято складом маркетплейса
-    CUSTOMER = "customer"      # FBS: отправлено клиенту
+    MP = "mp"  # FBO: принято складом маркетплейса
+    CUSTOMER = "customer"  # FBS: отправлено клиенту
 
 
 def _in(column: str, enum: type[StrEnum]) -> str:
@@ -123,7 +123,7 @@ class Stock(Base):
 
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), primary_key=True)
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), primary_key=True)
-    on_hand: Mapped[int] = mapped_column(default=0, server_default="0")   # физически на складе
+    on_hand: Mapped[int] = mapped_column(default=0, server_default="0")  # физически на складе
     reserved: Mapped[int] = mapped_column(default=0, server_default="0")  # из них в резерве FBS
 
     @property
