@@ -57,3 +57,19 @@ def test_html_form_double_submit_is_not_applied_twice(ids):
 def test_check_endpoint(ids):
     body = client.get("/api/check").json()
     assert body["ok"] is True and body["units"] == 25
+
+
+def test_form_remembers_choice_after_submit(ids):
+    """После отправки форма показывает тот же товар, склады и количество, а не сбрасывается."""
+    c = TestClient(app)
+    corzina, north, south = ids.sku["SKU-103"], ids.wh["Север"], ids.wh["Юг"]
+    form = {"product_id": corzina, "from_id": north, "to_id": south, "qty": 4, "key": "remember-1"}
+    page = c.post("/operations/transfer", data=form).text  # корзин на Севере нет — отказ
+
+    assert "Не хватает товара «Корзина» (SKU-103)" in page
+    transfer_form = page.split('action="/operations/transfer"')[1].split("</form>")[0]
+    assert f'value="{corzina}" selected' in transfer_form
+    assert 'name="qty" min="1" step="1" value="4"' in transfer_form
+    # Другие формы не трогаем: приход по-прежнему на первом товаре.
+    receipt_form = page.split('action="/operations/receipt"')[1].split("</form>")[0]
+    assert "selected" not in receipt_form.split('name="product_id"')[1].split("</select>")[0]

@@ -68,23 +68,26 @@ class ShortageInfo:
     total_available: int
     options: list[Option]
     plan: list[tuple[int, str, int]] = field(default_factory=list)  # как собрать заказ, если товара хватает
+    product: str = ""  # название товара, чтобы в сообщении было понятно, чего не хватает
+    sku: str = ""
+    elsewhere: list[tuple[str, int]] = field(default_factory=list)  # (склад, доступно) — где этот товар есть
 
     @property
     def message(self) -> str:
-        if self.total_available >= self.requested:
-            return (
-                f"На «{self.warehouse_name}» доступно {self.available} из {self.requested} шт., "
-                f"но всего на складах есть {self.total_available} шт."
-            )
-        return (
-            f"Не хватает товара: на «{self.warehouse_name}» доступно {self.available} шт., "
-            f"на всех складах {self.total_available} из {self.requested} шт."
-        )
+        what = f"товара «{self.product}» ({self.sku})" if self.product else "товара"
+        head = f"Не хватает {what}: на «{self.warehouse_name}» доступно {self.available} из {self.requested} шт."
+        if self.elsewhere:
+            where = ", ".join(f"«{name}» — {qty} шт." for name, qty in self.elsewhere)
+            return f"{head} Есть на других складах: {where}"
+        return f"{head} На других складах его тоже нет."
 
     def as_dict(self) -> dict:
         return {
+            "product": self.product,
+            "sku": self.sku,
             "warehouse_id": self.warehouse_id,
             "warehouse": self.warehouse_name,
+            "elsewhere": [{"warehouse": name, "available": qty} for name, qty in self.elsewhere],
             "requested": self.requested,
             "available": self.available,
             "total_available": self.total_available,
@@ -247,7 +250,8 @@ def shortage_info(s: Session, wh: Warehouse, qty: int, stocks: dict[int, Stock])
     """Считает, чего не хватает на `wh`, и какие есть варианты на других активных ФФ."""
     actives = _active_warehouses(s)
     avail = {w.id: (stocks[w.id].available if w.id in stocks else 0) for w in actives}
-    here = avail.get(wh.id, 0)
+    # Склад-источник может быть удалённым (вывоз остатка): его остаток берём напрямую.
+    here = stocks[wh.id].available if wh.id in stocks else 0
     total = sum(avail.values())
     others = sorted((w for w in actives if w.id != wh.id), key=lambda w: -avail[w.id])
 
@@ -274,7 +278,20 @@ def shortage_info(s: Session, wh: Warehouse, qty: int, stocks: dict[int, Stock])
             parts = ", ".join(f"{q} шт. с «{n}»" for _, n, q in moves)
             options.append(Option("transfer", f"Переместить на «{wh.name}»: {parts}", plan=moves))
 
-    return ShortageInfo(wh.id, wh.name, qty, here, total, options, plan)
+    product = s.get(Product, next(iter(stocks.values())).product_id) if stocks else None
+    elsewhere = [(w.name, avail[w.id]) for w in others if avail[w.id] > 0]
+    return ShortageInfo(
+        wh.id,
+        wh.name,
+        qty,
+        here,
+        total,
+        options,
+        plan,
+        product=product.name if product else "",
+        sku=product.sku if product else "",
+        elsewhere=elsewhere,
+    )
 
 
 def _split_plan(

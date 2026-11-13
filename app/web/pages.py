@@ -70,11 +70,14 @@ def _act(
     *args,
     done: Callable[[Session, inv.Result], tuple[str, str]],
     retry: dict | None = None,
+    form: dict | None = None,
     **kwargs,
 ):
     """Выполняет операцию и возвращает redirect с сообщением о результате.
 
     `retry` — что нужно, чтобы кнопки вариантов при нехватке повторили операцию.
+    `form` — что пользователь выбрал в форме: после перезагрузки форма покажет то же самое,
+    а не сбросится на первый товар.
     """
     try:
         with SessionLocal.begin() as s:
@@ -85,10 +88,10 @@ def _act(
                 kind, text = done(s, res)
     except Shortage as e:
         info: inv.ShortageInfo = e.details["shortage"]
-        return flash.redirect(back, "error", e.message, shortage=info.as_dict(), retry=retry)
+        return flash.redirect(back, "error", e.message, shortage=info.as_dict(), retry=retry, form=form)
     except DomainError as e:
-        return flash.redirect(back, "error", e.message)
-    return flash.redirect(back, kind, text)
+        return flash.redirect(back, "error", e.message, form=form)
+    return flash.redirect(back, kind, text, form=form)
 
 
 def _what(d: Document) -> str:
@@ -140,7 +143,9 @@ def post_receipt(product_id: str = Form(""), warehouse_id: str = Form(""), qty: 
     def done(s, r):
         return "ok", f"Приход проведён: {_what(r.document)} на «{r.document.to_warehouse.name}»"
 
-    return _act("/operations", inv.create_receipt, _int(product_id), _int(warehouse_id), _int(qty), key=key, done=done)
+    pid, wid, q = _int(product_id), _int(warehouse_id), _int(qty)
+    form = {"name": "receipt", "product_id": pid, "warehouse_id": wid, "qty": q}
+    return _act("/operations", inv.create_receipt, pid, wid, q, key=key, done=done, form=form)
 
 
 @router.post("/operations/transfer")
@@ -154,9 +159,9 @@ def post_transfer(
             "Товар числится в пути до приёмки"
         )
 
-    return _act(
-        "/operations", inv.create_transfer, _int(product_id), _int(from_id), _int(to_id), _int(qty), key=key, done=done
-    )
+    pid, src, dst, q = _int(product_id), _int(from_id), _int(to_id), _int(qty)
+    form = {"name": "transfer", "product_id": pid, "from_id": src, "to_id": dst, "qty": q}
+    return _act("/operations", inv.create_transfer, pid, src, dst, q, key=key, done=done, form=form)
 
 
 @router.post("/operations/transfer/{doc_id}/receive")
@@ -186,15 +191,10 @@ def post_fbs(
     key: str = Form(""),
     order_ref: str = Form(""),
 ):
+    pid, wid, q = _int(product_id), _int(warehouse_id), _int(qty)
+    form = {"name": "fbs", "product_id": pid, "warehouse_id": wid, "qty": q}
     return _act(
-        "/operations",
-        inv.create_fbs_order,
-        _int(product_id),
-        _int(warehouse_id),
-        _int(qty),
-        order_ref=order_ref,
-        key=key,
-        done=_fbs_done,
+        "/operations", inv.create_fbs_order, pid, wid, q, order_ref=order_ref, key=key, done=_fbs_done, form=form
     )
 
 
@@ -266,6 +266,7 @@ def post_fbo(product_id: str = Form(""), warehouse_id: str = Form(""), qty: str 
         key=key,
         done=done,
         retry={"product_id": pid, "qty": q},
+        form={"name": "fbo", "product_id": pid, "warehouse_id": wid, "qty": q},
     )
 
 

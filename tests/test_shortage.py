@@ -90,3 +90,19 @@ def test_waiting_order_can_be_cancelled(ids):
     run(inv.cancel_fbs, res.document.id)
     assert row("SKU-102").waiting == 0
     assert_reconciled()
+
+
+def test_shortage_message_names_the_product_and_where_it_is(ids):
+    # Корзин на Севере нет, но 4 шт. есть на Юге. Сообщение должно это прямо сказать.
+    with pytest.raises(Shortage) as err:
+        run(inv.create_transfer, ids.sku["SKU-103"], ids.wh["Север"], ids.wh["Юг"], 4)
+    msg = err.value.message
+    assert "«Корзина» (SKU-103)" in msg
+    assert "на «Север» доступно 0 из 4 шт." in msg
+    assert "«Юг» — 4 шт." in msg
+
+
+def test_shortage_message_when_nowhere_else(ids):
+    res = run(inv.create_fbs_order, ids.sku["SKU-102"], ids.wh["Север"], 9)
+    assert "«Контейнер» (SKU-102)" in res.shortage.message
+    assert "На других складах его тоже нет" in res.shortage.message

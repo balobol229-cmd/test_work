@@ -4,18 +4,19 @@
 {% block heading %}Операции{% endblock %}
 {% block sub %}Приход, перемещения между ФФ, заказы FBS и поставки FBO{% endblock %}
 
-{% macro product_select() -%}
+{# `sel` — что пользователь выбрал в прошлый раз: после отправки форма не сбрасывается. #}
+{% macro product_select(sel=None) -%}
 <label>Товар
   <select name="product_id" required>
-    {% for p in products %}<option value="{{ p.id }}">{{ p.sku }} · {{ p.name }}</option>{% endfor %}
+    {% for p in products %}<option value="{{ p.id }}" {{ "selected" if p.id == sel }}>{{ p.sku }} · {{ p.name }}</option>{% endfor %}
   </select>
 </label>
 {%- endmacro %}
 
-{% macro wh_select(name, label, items, pick=0) -%}
+{% macro wh_select(name, label, items, pick=0, sel=None) -%}
 <label>{{ label }}
   <select name="{{ name }}" required>
-    {% for w in items %}<option value="{{ w.id }}" {{ "selected" if loop.index0 == pick }}>{{ w.name }}{{ " (удалён)" if not w.is_active }}</option>{% endfor %}
+    {% for w in items %}<option value="{{ w.id }}" {{ "selected" if (w.id == sel if sel else loop.index0 == pick) }}>{{ w.name }}{{ " (удалён)" if not w.is_active }}</option>{% endfor %}
   </select>
 </label>
 {%- endmacro %}
@@ -24,19 +25,21 @@
 {% if listing.more > 0 %}<div class="empty">Показаны первые {{ listing.items | length }} из {{ listing.total | n }}. Выберите товар в фильтре, чтобы сузить список</div>{% endif %}
 {%- endmacro %}
 
-{% macro qty_input() -%}
-<label>Количество, шт.<input type="number" name="qty" min="1" step="1" value="1" required></label>
+{% macro qty_input(value=None) -%}
+<label>Количество, шт.<input type="number" name="qty" min="1" step="1" value="{{ value or 1 }}" required></label>
 {%- endmacro %}
 
 {% block content %}
+{# Что пользователь выбрал в последней отправленной форме: та форма покажет те же значения. #}
+{% set last = flash.form if flash and flash.form else {} %}
 <div class="grid ops">
   <div class="stack">
     <section class="card">
       <div class="card-head"><h2>Приход</h2><span class="meta">от поставщика на ФФ</span></div>
       <form method="post" action="/operations/receipt" class="form card-body">
         <input type="hidden" name="key" value="{{ new_key() }}">
-        {{ product_select() }}
-        <div class="form-row">{{ wh_select("warehouse_id", "На склад", active_warehouses) }}{{ qty_input() }}</div>
+        {% set f = last if last.name == "receipt" else {} %}{{ product_select(f.product_id) }}
+        <div class="form-row">{{ wh_select("warehouse_id", "На склад", active_warehouses, sel=f.warehouse_id) }}{{ qty_input(f.qty) }}</div>
         <button class="btn primary">Провести приход</button>
       </form>
     </section>
@@ -45,10 +48,10 @@
       <div class="card-head"><h2>Перемещение</h2><span class="meta">между ФФ</span></div>
       <form method="post" action="/operations/transfer" class="form card-body">
         <input type="hidden" name="key" value="{{ new_key() }}">
-        {{ product_select() }}
+        {% set f = last if last.name == "transfer" else {} %}{{ product_select(f.product_id) }}
         {% set sources = active_warehouses + (all_warehouses | rejectattr("is_active") | list) %}
-        <div class="form-row">{{ wh_select("from_id", "Откуда", sources) }}{{ wh_select("to_id", "Куда", active_warehouses, pick=1) }}</div>
-        {{ qty_input() }}
+        <div class="form-row">{{ wh_select("from_id", "Откуда", sources, sel=f.from_id) }}{{ wh_select("to_id", "Куда", active_warehouses, pick=1, sel=f.to_id) }}</div>
+        {{ qty_input(f.qty) }}
         <button class="btn primary">Отправить</button>
       </form>
     </section>
@@ -57,8 +60,8 @@
       <div class="card-head"><h2>Заказ FBS</h2><span class="meta">резерв на ФФ до отправки</span></div>
       <form method="post" action="/operations/fbs" class="form card-body">
         <input type="hidden" name="key" value="{{ new_key() }}">
-        {{ product_select() }}
-        <div class="form-row">{{ wh_select("warehouse_id", "С какого ФФ", active_warehouses) }}{{ qty_input() }}</div>
+        {% set f = last if last.name == "fbs" else {} %}{{ product_select(f.product_id) }}
+        <div class="form-row">{{ wh_select("warehouse_id", "С какого ФФ", active_warehouses, sel=f.warehouse_id) }}{{ qty_input(f.qty) }}</div>
         <label>Номер заказа WB<input name="order_ref" placeholder="Необязательно" maxlength="64"></label>
         <button class="btn primary">Зарезервировать</button>
       </form>
@@ -68,8 +71,8 @@
       <div class="card-head"><h2>Поставка FBO</h2><span class="meta">на склад WB</span></div>
       <form method="post" action="/operations/fbo" class="form card-body">
         <input type="hidden" name="key" value="{{ new_key() }}">
-        {{ product_select() }}
-        <div class="form-row">{{ wh_select("warehouse_id", "С какого ФФ", active_warehouses) }}{{ qty_input() }}</div>
+        {% set f = last if last.name == "fbo" else {} %}{{ product_select(f.product_id) }}
+        <div class="form-row">{{ wh_select("warehouse_id", "С какого ФФ", active_warehouses, sel=f.warehouse_id) }}{{ qty_input(f.qty) }}</div>
         <button class="btn primary">Отгрузить</button>
       </form>
     </section>
